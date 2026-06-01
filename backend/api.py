@@ -7,6 +7,8 @@ Proxied by nginx at /capi/
 import os
 import time
 import yaml
+import hashlib
+import threading
 import requests
 from functools import wraps
 from flask import Flask, request, jsonify, Response
@@ -72,6 +74,97 @@ def cached(key, ttl_seconds, fetcher):
         if entry:
             return entry['data']
         raise e
+
+# =============================================================================
+# POSTER CACHE (filesystem) — Plex stream protection
+# =============================================================================
+# Plex's photo transcoder is hit ONCE per (ratingKey,size), ever — results are
+# written to disk and served from there. A semaphore caps how many transcodes
+# can run at Plex concurrently so a cold cache can't starve active streams.
+POSTER_CACHE_DIR = os.environ.get('POSTER_CACHE_DIR', '/cache')
+# Only two sizes are allowed, so the cache stays small and Plex only ever
+# transcodes these dimensions: small thumbs (rows) and grid posters.
+POSTER_SIZES = {(120, 180), (300, 450)}
+DEFAULT_POSTER_SIZE = (300, 450)
+# At most 3 simultaneous transcode requests to Plex (cache hits don't count).
+_plex_fetch_sem = threading.Semaphore(3)
+
+try:
+    os.makedirs(POSTER_CACHE_DIR, exist_ok=True)
+except OSError:
+    pass
+
+
+def _clamp_poster_size():
+    """Read w/h from the query string, clamp to the allowlist (default = grid)."""
+    try:
+        w = int(request.args.get('w', DEFAULT_POSTER_SIZE[0]))
+        h = int(request.args.get('h', DEFAULT_POSTER_SIZE[1]))
+    except (TypeError, ValueError):
+        return DEFAULT_POSTER_SIZE
+    return (w, h) if (w, h) in POSTER_SIZES else DEFAULT_POSTER_SIZE
+
+
+def serve_cached_poster(rating_key):
+    """Serve a poster from the on-disk cache, fetching from Plex once on a miss.
+
+    Honors If-None-Match (304) and sets a 30-day immutable cache header so the
+    browser caches too. Used by both the admin and Kelly poster routes.
+    """
+    w, h = _clamp_poster_size()
+    safe_key = str(rating_key).replace('/', '_')
+    path = os.path.join(POSTER_CACHE_DIR, f'{safe_key}_{w}x{h}.jpg')
+    etag = f'"{safe_key}-{w}x{h}"'
+
+    data = None
+    if os.path.exists(path):
+        try:
+            with open(path, 'rb') as fh:
+                data = fh.read()
+        except OSError:
+            data = None
+
+    if data is None:
+        # Cache miss — fetch from Plex under the concurrency cap.
+        # Use the PHOTO TRANSCODER (not /metadata/thumb, which ignores width/height
+        # and returns the full ~230KB original) so we get a real ~7-33KB resized
+        # image. Plex transcodes each poster size once, then it's served from disk.
+        with _plex_fetch_sem:
+            try:
+                resp = requests.get(
+                    f'{PLEX_URL}/photo/:/transcode',
+                    params={
+                        'X-Plex-Token': PLEX_TOKEN,
+                        'width': w,
+                        'height': h,
+                        'minSize': 1,
+                        'upscale': 1,
+                        'url': f'/library/metadata/{rating_key}/thumb',
+                    },
+                    timeout=10,
+                )
+            except Exception:
+                return Response('Error', status=500)
+        if resp.status_code != 200:
+            return Response('Not found', status=404)
+        data = resp.content
+        try:
+            tmp = f'{path}.{os.getpid()}.tmp'
+            with open(tmp, 'wb') as fh:
+                fh.write(data)
+            os.replace(tmp, path)  # atomic — no torn reads under concurrency
+        except OSError:
+            pass
+
+    if request.headers.get('If-None-Match') == etag:
+        return Response(status=304, headers={'ETag': etag,
+                                             'Cache-Control': 'public, max-age=2592000, immutable'})
+
+    return Response(data, headers={
+        'Content-Type': 'image/jpeg',
+        'Cache-Control': 'public, max-age=2592000, immutable',
+        'ETag': etag,
+    })
 
 def invalidate_cache(prefix=''):
     keys_to_delete = [k for k in _cache if k.startswith(prefix)] if prefix else list(_cache.keys())
@@ -217,6 +310,22 @@ def get_library_items(key):
             all_results = cached(cache_key, 60, do_search)
             total = len(all_results)
             items = all_results[offset:offset + size]
+        elif sort == 'addedAt':
+            # Newest-added first, fetched server-side ONE PAGE at a time. Plex sorts
+            # and slices via the container args (~40ms/page), so we never pull the
+            # whole library just to show the latest 50. The container-pagination
+            # caveat that bites section.all() does NOT apply to a sorted search —
+            # verified reliable across pages on this server.
+            def do_recent():
+                results = section.search(
+                    sort='addedAt:desc',
+                    container_start=offset,
+                    container_size=size,
+                    maxresults=size,
+                )
+                return [serialize_item(item) for item in results]
+            items = cached(f'recent:{key}:{offset}:{size}', 60, do_recent)
+            total = cached(f'recent_total:{key}', 60, lambda: section.totalSize)
         else:
             # Fetch all and cache, then slice for pagination
             # plexapi container_start/container_size are unreliable
@@ -242,27 +351,7 @@ def get_library_items(key):
 @app.route('/capi/poster/<rating_key>')
 @require_admin
 def get_poster(rating_key):
-    try:
-        resp = requests.get(
-            f'{PLEX_URL}/library/metadata/{rating_key}/thumb',
-            params={
-                'X-Plex-Token': PLEX_TOKEN,
-                'width': 300,
-                'height': 450,
-            },
-            stream=True,
-            timeout=10,
-        )
-        if resp.status_code != 200:
-            return Response('Not found', status=404)
-
-        headers = {
-            'Content-Type': resp.headers.get('Content-Type', 'image/jpeg'),
-            'Cache-Control': 'public, max-age=86400, immutable',
-        }
-        return Response(resp.iter_content(8192), headers=headers)
-    except Exception:
-        return Response('Error', status=500)
+    return serve_cached_poster(rating_key)
 
 
 @app.route('/capi/libraries/<key>/collections')
@@ -635,27 +724,7 @@ def kelly_search():
 @app.route('/capi/kelly/poster/<rating_key>')
 @require_kelly
 def kelly_get_poster(rating_key):
-    try:
-        resp = requests.get(
-            f'{PLEX_URL}/library/metadata/{rating_key}/thumb',
-            params={
-                'X-Plex-Token': PLEX_TOKEN,
-                'width': 300,
-                'height': 450,
-            },
-            stream=True,
-            timeout=10,
-        )
-        if resp.status_code != 200:
-            return Response('Not found', status=404)
-
-        headers = {
-            'Content-Type': resp.headers.get('Content-Type', 'image/jpeg'),
-            'Cache-Control': 'public, max-age=86400, immutable',
-        }
-        return Response(resp.iter_content(8192), headers=headers)
-    except Exception:
-        return Response('Error', status=500)
+    return serve_cached_poster(rating_key)
 
 
 # =============================================================================

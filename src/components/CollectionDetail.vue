@@ -2,7 +2,10 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { VueDraggable } from 'vue-draggable-plus'
 import { useApi } from '../composables/useApi.js'
+import { useViewPreference } from '../composables/useViewPreference.js'
 import PosterCard from './PosterCard.vue'
+import CollectionListRow from './CollectionListRow.vue'
+import AddItemsPanel from './AddItemsPanel.vue'
 
 const props = defineProps({
   collectionKey: { type: String, required: true },
@@ -29,12 +32,9 @@ const hasChanges = ref(false)
 const autoSavePending = ref(false)        // a debounce timer is currently armed
 const justSaved = ref(false)              // brief 'Saved' pill after a successful auto-save
 
-// ── Save progress modal (shown for BOTH manual and auto saves) ──
-const saveOverlay = ref(false)
-const saveElapsed = ref(0)
-const saveResult = ref(null)
-let elapsedTimer = null
-let autoCloseTimer = null    // auto-dismiss the modal after an auto-save
+// ── Save status (non-blocking — header pill + toast, NO overlay) ──
+const lastSaveFailed = ref(false)
+let toastTimer = null    // debounce the "Changes saved" toast across a flurry of autosaves
 
 // ── Leave guard (custom unsaved-changes confirm for in-app back nav) ──
 const leaveGuard = ref(false)
@@ -60,13 +60,15 @@ let savedTimer = null
 const flagSaved = () => {
   justSaved.value = true
   if (savedTimer) clearTimeout(savedTimer)
-  savedTimer = setTimeout(() => { justSaved.value = false }, 2500)
+  savedTimer = setTimeout(() => { justSaved.value = false }, 4000)
 }
 
-// ── Search ──
-const searchQuery = ref('')
-const searchResults = ref([])
-const isSearching = ref(false)
+// Debounced "Changes saved" toast — a flurry of autosaves yields ONE toast once
+// the edits settle, instead of spamming one per save.
+const flagSavedToast = (label) => {
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => emit('toast', label || 'Changes saved', 'success'), 600)
+}
 
 // ── State ──
 const itemKeys = computed(() => new Set(items.value.map(i => i.ratingKey)))
@@ -77,6 +79,18 @@ const canSave = computed(() => title.value.trim() && items.value.length > 0 && h
 const hasUnsaved = computed(() => hasChanges.value || autoSavePending.value || isSaving.value)
 
 const adminKey = computed(() => localStorage.getItem('collection_manager_admin_key') || '')
+
+// ── List / Grid view (persisted, default List) ──
+const { viewMode, setView } = useViewPreference()
+const isSwitchingView = ref(false)   // brief spinner while the re-sized images lazy-load
+let switchTimer = null
+const switchView = (v) => {
+  if (v === viewMode.value) return
+  isSwitchingView.value = true
+  setView(v)
+  if (switchTimer) clearTimeout(switchTimer)
+  switchTimer = setTimeout(() => { isSwitchingView.value = false }, 350)
+}
 
 // ── Pending changes summary ──
 const pendingChanges = computed(() => {
@@ -128,10 +142,10 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  if (elapsedTimer) clearInterval(elapsedTimer)
   if (autoSaveTimer) clearTimeout(autoSaveTimer)
   if (savedTimer) clearTimeout(savedTimer)
-  if (autoCloseTimer) clearTimeout(autoCloseTimer)
+  if (toastTimer) clearTimeout(toastTimer)
+  if (switchTimer) clearTimeout(switchTimer)
   window.removeEventListener('beforeunload', onBeforeUnload)
 })
 
@@ -140,6 +154,7 @@ onUnmounted(() => {
 const markDirty = () => {
   hasChanges.value = true
   justSaved.value = false
+  lastSaveFailed.value = false   // a fresh edit supersedes a prior failure
   if (isSaving.value) changedDuringSave = true
 }
 
@@ -183,27 +198,6 @@ const describeEvent = (snapshot) => {
   return parts.join(' · ')
 }
 
-// ── Search library ──
-let searchTimer = null
-watch(searchQuery, (q) => {
-  clearTimeout(searchTimer)
-  if (!q.trim()) {
-    searchResults.value = []
-    return
-  }
-  searchTimer = setTimeout(async () => {
-    isSearching.value = true
-    try {
-      const data = await apiFetch(`/capi/libraries/${props.libraryKey}/items?search=${encodeURIComponent(q)}&size=20`)
-      searchResults.value = data.items || []
-    } catch {
-      searchResults.value = []
-    } finally {
-      isSearching.value = false
-    }
-  }, 300)
-})
-
 // ── Actions ──
 const addItem = (item) => {
   if (itemKeys.value.has(item.ratingKey)) return
@@ -219,13 +213,14 @@ const removeItem = (item) => {
 const onDragEnd = (e) => {
   // Ignore no-op drags (picked up and dropped back in the same slot).
   if (e && e.oldIndex === e.newIndex) return
-  // Reorder is dirty but does NOT auto-save — the user must click Save.
-  markDirty()
+  // Reorder autosaves like add/remove — the debounce coalesces a flurry of drags.
+  markChanged()
 }
 
-// Two modes, both surface the SAME modal so every save is unmistakable:
-//   'explicit' — Save button. Success modal stays until the user clicks Done.
-//   'auto'     — debounced auto-save. Success modal auto-dismisses after a beat.
+// Non-blocking save (both modes). Feedback rides the header pill + a transient
+// toast — the UI is NEVER covered. The local state already reflects the change
+// (optimistic); this just persists it to Plex in the background.
+//   'explicit' — Save button.   'auto' — debounced autosave (add/remove/reorder/edit).
 const save = async ({ mode = 'explicit' } = {}) => {
   if (!canSave.value) {
     console.debug('[save] skipped — canSave is false', {
@@ -243,21 +238,12 @@ const save = async ({ mode = 'explicit' } = {}) => {
   // Snapshot what's about to change so we can describe the event AFTER save zeroes hasChanges.
   const snapshot = { ...pendingChanges.value }
   const eventName = describeEvent(snapshot)
-  const collectionTitle = title.value.trim() || 'collection'
-
-  console.debug('[save] start', { mode, eventName, collectionTitle, snapshot })
 
   isSaving.value = true
+  lastSaveFailed.value = false
   changedDuringSave = false
-  if (autoCloseTimer) { clearTimeout(autoCloseTimer); autoCloseTimer = null }
-  saveOverlay.value = true
-  saveElapsed.value = 0
-  saveResult.value = null
 
   const startTime = Date.now()
-  elapsedTimer = setInterval(() => {
-    saveElapsed.value = ((Date.now() - startTime) / 1000).toFixed(1)
-  }, 100)
 
   // Snapshot exactly what we're sending so post-save state matches the PUT body,
   // not whatever the user mutated while the request was in flight.
@@ -276,24 +262,10 @@ const save = async ({ mode = 'explicit' } = {}) => {
       }),
     })
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-    if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null }
-    saveElapsed.value = elapsed
-    const stats = res.stats || {}
+    console.debug('[save] success', { mode, eventName, elapsed, stats: res.stats || {} })
 
-    console.debug('[save] success', { mode, elapsed, stats })
-
-    saveResult.value = {
-      success: true,
-      auto: mode === 'auto',
-      eventName,
-      collectionTitle,
-      stats,
-    }
-    flagSaved()
-    // Auto-save: dismiss the confirmation on its own so it doesn't block the user.
-    if (mode === 'auto') {
-      autoCloseTimer = setTimeout(closeSaveOverlay, 2000)
-    }
+    flagSaved()              // header pill → "Saved" for a few seconds
+    flagSavedToast(eventName ? `Saved · ${eventName}` : 'Changes saved')
 
     originalItems.value = savedItems
     originalKeys.value = new Set(savedKeys)
@@ -304,27 +276,14 @@ const save = async ({ mode = 'explicit' } = {}) => {
     emit('saved')
     if (changedDuringSave && !isSmart.value) scheduleAutoSave()
   } catch (err) {
-    if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null }
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-    saveElapsed.value = elapsed
-    console.error('[save] FAILED', { mode, elapsed, err })
-    // Surface failures in the modal for both modes — a failed auto-save must not
-    // be missed. Errors never auto-dismiss; the user has to acknowledge them.
-    saveResult.value = {
-      success: false,
-      auto: mode === 'auto',
-      error: err.message || 'Failed to save',
-      collectionTitle,
-    }
+    console.error('[save] FAILED', { mode, err })
+    // Non-blocking failure: flip the pill to "Save failed" and toast the error.
+    // hasChanges stays true so the user's edits remain on screen to retry.
+    lastSaveFailed.value = true
+    emit('toast', err.message || 'Failed to save changes', 'error')
   } finally {
     isSaving.value = false
   }
-}
-
-const closeSaveOverlay = () => {
-  if (autoCloseTimer) { clearTimeout(autoCloseTimer); autoCloseTimer = null }
-  saveOverlay.value = false
-  saveResult.value = null
 }
 
 // ── Leave guard ──
@@ -346,10 +305,10 @@ const resolveLeave = (ok) => {
 const discardChanges = () => resolveLeave(true)
 const dismissGuard = () => resolveLeave(false)
 const saveAndContinue = async () => {
-  leaveGuard.value = false        // hide the guard; the save modal takes over
+  leaveGuard.value = false        // hide the guard; save runs in the background
   await save({ mode: 'explicit' })
-  // Continue only if the save actually persisted — a failure keeps its error modal up.
-  resolveLeave(!hasChanges.value && !isSaving.value)
+  // Continue only if the save actually persisted — a failure leaves edits in place.
+  resolveLeave(!lastSaveFailed.value && !hasChanges.value && !isSaving.value)
 }
 const attemptBack = async () => {
   if (await confirmLeave()) emit('back')
@@ -407,99 +366,6 @@ watch(summary, () => { if (!isLoading.value && !reverting) markChanged() }, { fl
 
 <template>
   <div>
-    <!-- Save progress overlay -->
-    <Teleport to="body">
-      <Transition name="fade">
-        <div v-if="saveOverlay"
-             class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div class="bg-slate-900 border border-white/15 rounded-2xl p-6 max-w-sm w-full mx-4 shadow-2xl">
-
-            <!-- In progress -->
-            <div v-if="!saveResult" class="text-center">
-              <svg class="w-10 h-10 animate-spin text-purple-500 mx-auto mb-4" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-              </svg>
-              <h3 class="text-white font-bold mb-2">Syncing to Plex</h3>
-              <div class="text-xs text-slate-400 space-y-1 mb-3">
-                <p v-if="pendingChanges.adding > 0">Adding {{ pendingChanges.adding }} item{{ pendingChanges.adding !== 1 ? 's' : '' }}</p>
-                <p v-if="pendingChanges.removing > 0">Removing {{ pendingChanges.removing }} item{{ pendingChanges.removing !== 1 ? 's' : '' }}</p>
-                <p>Reordering {{ pendingChanges.totalItems }} items</p>
-              </div>
-              <div class="text-lg font-mono text-purple-400">{{ saveElapsed }}s</div>
-              <p class="text-[10px] text-slate-600 mt-2">All operations run locally on 10.0.0.222</p>
-            </div>
-
-            <!-- Success -->
-            <div v-else-if="saveResult.success" class="text-center">
-              <div class="w-12 h-12 bg-emerald-600/20 rounded-full flex items-center justify-center mx-auto mb-3">
-                <svg class="w-7 h-7 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
-                </svg>
-              </div>
-              <p v-if="saveResult.auto" class="text-[10px] text-emerald-400/70 uppercase tracking-widest mb-1">Auto-saved</p>
-              <h3 class="text-white font-bold mb-1">Saved "{{ saveResult.collectionTitle }}"</h3>
-              <p class="text-xs text-slate-400 mb-3">{{ saveResult.eventName }}</p>
-              <div class="bg-slate-800/60 rounded-xl p-3 text-xs text-slate-300 space-y-1.5 text-left mb-4">
-                <div class="flex justify-between">
-                  <span class="text-slate-500">Total items</span>
-                  <span>{{ saveResult.stats.totalItems || 0 }}</span>
-                </div>
-                <div v-if="saveResult.stats.added" class="flex justify-between">
-                  <span class="text-slate-500">Added</span>
-                  <span class="text-emerald-400">+{{ saveResult.stats.added }}</span>
-                </div>
-                <div v-if="saveResult.stats.removed" class="flex justify-between">
-                  <span class="text-slate-500">Removed</span>
-                  <span class="text-red-400">-{{ saveResult.stats.removed }}</span>
-                </div>
-                <div v-if="saveResult.stats.reordered" class="flex justify-between">
-                  <span class="text-slate-500">Reorder ops</span>
-                  <span>{{ saveResult.stats.reordered }}</span>
-                </div>
-                <div class="flex justify-between border-t border-white/10 pt-1.5">
-                  <span class="text-slate-500">Plex API calls</span>
-                  <span class="font-mono">{{ saveResult.stats.plexCalls || 0 }}</span>
-                </div>
-                <div class="flex justify-between">
-                  <span class="text-slate-500">Wall time</span>
-                  <span class="font-mono">{{ saveResult.stats.elapsed || saveElapsed }}s</span>
-                </div>
-                <div v-if="saveResult.stats.plexCalls && Number(saveResult.stats.elapsed || saveElapsed) > 0"
-                     class="flex justify-between">
-                  <span class="text-slate-500">Throughput</span>
-                  <span class="font-mono">
-                    {{ (Number(saveResult.stats.plexCalls) / Number(saveResult.stats.elapsed || saveElapsed)).toFixed(1) }} calls/s
-                  </span>
-                </div>
-              </div>
-              <p class="text-[10px] text-slate-600 mb-3">All operations run locally on 10.0.0.222</p>
-              <button @click="closeSaveOverlay"
-                      class="w-full py-2.5 bg-purple-600 hover:bg-purple-500 text-white text-sm font-medium rounded-xl transition-colors">
-                Done
-              </button>
-            </div>
-
-            <!-- Error -->
-            <div v-else class="text-center">
-              <div class="w-12 h-12 bg-red-600/20 rounded-full flex items-center justify-center mx-auto mb-3">
-                <svg class="w-7 h-7 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                </svg>
-              </div>
-              <h3 class="text-white font-bold mb-1">Save failed: "{{ saveResult.collectionTitle }}"</h3>
-              <p class="text-sm text-red-300 mb-1">{{ saveResult.error }}</p>
-              <p class="text-[10px] text-slate-600 mb-4">after {{ saveElapsed }}s</p>
-              <button @click="closeSaveOverlay"
-                      class="w-full py-2.5 bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium rounded-xl transition-colors">
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
-
     <!-- Unsaved-changes leave guard (custom — for in-app back navigation) -->
     <Teleport to="body">
       <Transition name="fade">
@@ -575,6 +441,7 @@ watch(summary, () => { if (!isLoading.value && !reverting) markChanged() }, { fl
             </svg>
             Saving
           </span>
+          <span v-else-if="lastSaveFailed" class="text-red-400" title="Save failed — your edits are still here; try again">Save failed</span>
           <span v-else-if="autoSavePending" class="text-amber-400/80" title="Auto-save will fire shortly">Pending</span>
           <span v-else-if="hasChanges" class="text-amber-400">Unsaved</span>
           <span v-else-if="justSaved" class="text-emerald-400">Saved</span>
@@ -658,15 +525,64 @@ watch(summary, () => { if (!isLoading.value && !reverting) markChanged() }, { fl
 
         <!-- Items (main area) -->
         <div class="flex-1 min-w-0">
-          <h3 class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">
-            {{ items.length }} Item{{ items.length !== 1 ? 's' : '' }}
-          </h3>
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="text-xs font-bold text-slate-400 uppercase tracking-widest">
+              {{ items.length }} Item{{ items.length !== 1 ? 's' : '' }}
+            </h3>
+
+            <!-- List / Grid toggle -->
+            <div class="flex items-center gap-0.5 p-0.5 bg-slate-900/70 border border-white/10 rounded-lg">
+              <button @click="switchView('list')"
+                      :class="viewMode === 'list' ? 'bg-purple-600 text-white' : 'text-slate-400 hover:text-slate-200'"
+                      class="p-1.5 rounded-md transition-colors" title="List view" aria-label="List view">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+                </svg>
+              </button>
+              <button @click="switchView('grid')"
+                      :class="viewMode === 'grid' ? 'bg-purple-600 text-white' : 'text-slate-400 hover:text-slate-200'"
+                      class="p-1.5 rounded-md transition-colors" title="Grid view" aria-label="Grid view">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5h6v6H4V5zm10 0h6v6h-6V5zM4 15h6v6H4v-6zm10 0h6v6h-6v-6z"/>
+                </svg>
+              </button>
+            </div>
+          </div>
 
           <div v-if="items.length === 0" class="text-center py-12 text-slate-600">
             <p class="text-sm">No items in this collection</p>
             <p class="text-xs mt-1">Search to start adding items</p>
           </div>
 
+          <!-- Brief spinner while switching views (re-sized images lazy-load) -->
+          <div v-else-if="isSwitchingView" class="py-16 flex justify-center">
+            <svg class="w-6 h-6 animate-spin text-purple-500" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+          </div>
+
+          <!-- LIST view (ranked rows) -->
+          <VueDraggable
+            v-else-if="viewMode === 'list'"
+            v-model="items"
+            :animation="200"
+            :disabled="isSmart"
+            handle=".drag-handle"
+            ghost-class="sortable-ghost"
+            @end="onDragEnd"
+            class="space-y-1.5">
+            <CollectionListRow
+              v-for="(item, idx) in items"
+              :key="item.ratingKey"
+              :item="item"
+              :position="idx + 1"
+              :removable="!isSmart"
+              @remove="removeItem"
+            />
+          </VueDraggable>
+
+          <!-- GRID view (posters) -->
           <VueDraggable
             v-else
             v-model="items"
@@ -686,67 +602,12 @@ watch(summary, () => { if (!isLoading.value && !reverting) markChanged() }, { fl
           </VueDraggable>
         </div>
 
-        <!-- Always-visible search panel (Letterboxd-style) -->
-        <div v-if="!isSmart" class="w-full lg:w-72 flex-shrink-0">
-          <div class="lg:sticky lg:top-20">
-            <h3 class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Add a Film</h3>
-            <div class="p-3 bg-slate-900/50 border border-white/10 rounded-2xl">
-              <div class="relative mb-2">
-                <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-                </svg>
-                <input v-model="searchQuery"
-                       type="text"
-                       placeholder="Search library..."
-                       class="w-full pl-10 pr-4 py-2 bg-dark-900 border border-white/15 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-purple-500/60 transition-colors" />
-              </div>
-
-              <div v-if="isSearching" class="flex justify-center py-3">
-                <svg class="w-5 h-5 animate-spin text-slate-500" fill="none" viewBox="0 0 24 24">
-                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-                </svg>
-              </div>
-
-              <div v-else-if="searchResults.length > 0" class="max-h-[400px] overflow-y-auto thin-scrollbar space-y-0.5">
-                <button v-for="result in searchResults"
-                        :key="result.ratingKey"
-                        @click="addItem(result)"
-                        :disabled="itemKeys.has(result.ratingKey)"
-                        class="w-full flex items-center gap-2.5 p-2 rounded-lg text-left transition-colors"
-                        :class="itemKeys.has(result.ratingKey)
-                          ? 'opacity-40 cursor-not-allowed'
-                          : 'hover:bg-slate-800/60 cursor-pointer'">
-                  <div class="w-8 h-12 flex-shrink-0 rounded-md overflow-hidden bg-slate-800">
-                    <img v-if="result.thumb"
-                         :src="`${result.thumb}?k=${encodeURIComponent(adminKey)}`"
-                         :alt="result.title"
-                         class="w-full h-full object-cover"
-                         loading="lazy" />
-                  </div>
-                  <div class="flex-1 min-w-0">
-                    <div class="text-xs text-white truncate">{{ result.title }}</div>
-                    <div class="text-[10px] text-slate-500">{{ result.year }}</div>
-                  </div>
-                  <svg v-if="itemKeys.has(result.ratingKey)" class="w-4 h-4 text-purple-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
-                  </svg>
-                  <svg v-else class="w-4 h-4 text-slate-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
-                  </svg>
-                </button>
-              </div>
-
-              <div v-else-if="searchQuery && !isSearching" class="text-center py-3 text-xs text-slate-600">
-                No results for "{{ searchQuery }}"
-              </div>
-
-              <div v-else class="text-center py-3 text-xs text-slate-600">
-                Type to search
-              </div>
-            </div>
-          </div>
-        </div>
+        <!-- Always-visible add panel (Search / Recent tabs) -->
+        <AddItemsPanel v-if="!isSmart"
+                       :library-key="libraryKey"
+                       :added-keys="itemKeys"
+                       :admin-key="adminKey"
+                       @add="addItem" />
       </div>
     </template>
   </div>

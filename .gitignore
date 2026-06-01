@@ -4,6 +4,9 @@ node_modules/
 # Build output (generated on deploy)
 dist/
 
+# Cached posters (runtime, fetched from Plex on demand)
+backend/poster-cache/
+
 # Secrets / local env
 .env
 *.local
