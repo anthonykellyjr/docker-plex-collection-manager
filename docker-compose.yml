@@ -1,0 +1,33 @@
+# Runs the whole thing: a Flask API and an nginx that serves the built app and
+# proxies /capi to the API. Out of the box it starts in demo mode, so this works
+# with no Plex server and no tokens:
+#
+#   docker compose up --build   ->   http://localhost:8080   (log in with: demo)
+#
+# To point it at a real Plex server, copy .env.example to .env, set DEMO_MODE=0
+# plus PLEX_URL / PLEX_TOKEN / ADMIN_KEY, then bring it back up.
+
+services:
+  api:
+    build: ./backend
+    environment:
+      - DEMO_MODE=${DEMO_MODE:-1}
+      - PLEX_URL=${PLEX_URL:-}
+      - PLEX_TOKEN=${PLEX_TOKEN:-}
+      - ADMIN_KEY=${ADMIN_KEY:-}
+      # 1 worker keeps the demo's in-memory store consistent. Raise it for real use.
+      - GUNICORN_WORKERS=${GUNICORN_WORKERS:-1}
+    volumes:
+      - poster-cache:/cache
+    restart: unless-stopped
+
+  web:
+    build: .
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  poster-cache:

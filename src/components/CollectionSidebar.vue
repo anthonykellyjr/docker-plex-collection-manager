@@ -86,7 +86,7 @@ defineExpose({ refresh })
         <span class="flex-1 truncate">{{ col.title }}</span>
         <span v-if="col.kometaManaged"
               class="flex-shrink-0 text-[9px] font-bold px-1.5 py-0.5 bg-amber-600/20 text-amber-400 border border-amber-500/30 rounded-md uppercase tracking-wider"
-              title="Managed by Kometa — changes may be overwritten at 3 AM">
+              title="Managed by Kometa, changes may be overwritten at 3 AM">
           Kometa
         </span>
         <span v-if="col.smart"

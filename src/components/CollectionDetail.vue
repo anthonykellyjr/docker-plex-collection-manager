@@ -32,7 +32,7 @@ const hasChanges = ref(false)
 const autoSavePending = ref(false)        // a debounce timer is currently armed
 const justSaved = ref(false)              // brief 'Saved' pill after a successful auto-save
 
-// ── Save status (non-blocking — header pill + toast, NO overlay) ──
+// ── Save status (non-blocking, header pill + toast, NO overlay) ──
 const lastSaveFailed = ref(false)
 let toastTimer = null    // debounce the "Changes saved" toast across a flurry of autosaves
 
@@ -51,7 +51,7 @@ let changedDuringSave = false
 // watchers don't re-mark the form dirty during the revert.
 let reverting = false
 
-// Template ref for the collection-name input — used by the pencil-icon click handler.
+// Template ref for the collection-name input, used by the pencil-icon click handler.
 const titleInput = ref(null)
 
 // Brief "Saved" confirmation shown in the header status pill. The pill lives in the
@@ -63,7 +63,7 @@ const flagSaved = () => {
   savedTimer = setTimeout(() => { justSaved.value = false }, 4000)
 }
 
-// Debounced "Changes saved" toast — a flurry of autosaves yields ONE toast once
+// Debounced "Changes saved" toast, a flurry of autosaves yields ONE toast once
 // the edits settle, instead of spamming one per save.
 const flagSavedToast = (label) => {
   if (toastTimer) clearTimeout(toastTimer)
@@ -75,7 +75,7 @@ const itemKeys = computed(() => new Set(items.value.map(i => i.ratingKey)))
 const isKometa = computed(() => collection.value?.kometaManaged || false)
 const isSmart = computed(() => collection.value?.smart || false)
 const canSave = computed(() => title.value.trim() && items.value.length > 0 && hasChanges.value && !isSmart.value)
-// Anything not yet persisted — drives the leave guard + the native unload prompt.
+// Anything not yet persisted, drives the leave guard + the native unload prompt.
 const hasUnsaved = computed(() => hasChanges.value || autoSavePending.value || isSaving.value)
 
 const adminKey = computed(() => localStorage.getItem('collection_manager_admin_key') || '')
@@ -103,7 +103,7 @@ const pendingChanges = computed(() => {
 
 // ── Load collection ──
 // Pure fetch: populates state and resets the dirty baseline. Returns true on
-// success. Does NOT touch isLoading or emit toasts — callers own that UX.
+// success. Does NOT touch isLoading or emit toasts, callers own that UX.
 const fetchCollection = async () => {
   try {
     const data = await apiFetch(`/capi/collections/${props.collectionKey}/items`)
@@ -130,7 +130,7 @@ const loadCollection = async () => {
 }
 
 // Native browser guard for hard unloads (tab close / refresh / typing a new URL).
-// The browser shows its OWN dialog here — its text can't be customized and it can't
+// The browser shows its OWN dialog here, its text can't be customized and it can't
 // be replaced with our modal. Our custom modal only covers in-app back navigation.
 const onBeforeUnload = (e) => {
   if (hasUnsaved.value) { e.preventDefault(); e.returnValue = '' }
@@ -149,7 +149,7 @@ onUnmounted(() => {
   window.removeEventListener('beforeunload', onBeforeUnload)
 })
 
-// Mark the form dirty WITHOUT scheduling an auto-save. Reordering uses this — the
+// Mark the form dirty WITHOUT scheduling an auto-save. Reordering uses this, the
 // user must persist a reorder with an explicit Save press.
 const markDirty = () => {
   hasChanges.value = true
@@ -159,7 +159,7 @@ const markDirty = () => {
 }
 
 // Mark dirty AND arm/reset the auto-save debounce timer. Used by title, summary,
-// add and remove — everything except reorder auto-saves.
+// add and remove, everything except reorder auto-saves.
 const markChanged = () => {
   markDirty()
   scheduleAutoSave()
@@ -213,24 +213,24 @@ const removeItem = (item) => {
 const onDragEnd = (e) => {
   // Ignore no-op drags (picked up and dropped back in the same slot).
   if (e && e.oldIndex === e.newIndex) return
-  // Reorder autosaves like add/remove — the debounce coalesces a flurry of drags.
+  // Reorder autosaves like add/remove, the debounce coalesces a flurry of drags.
   markChanged()
 }
 
 // Non-blocking save (both modes). Feedback rides the header pill + a transient
-// toast — the UI is NEVER covered. The local state already reflects the change
+// toast, the UI is NEVER covered. The local state already reflects the change
 // (optimistic); this just persists it to Plex in the background.
-//   'explicit' — Save button.   'auto' — debounced autosave (add/remove/reorder/edit).
+//   'explicit', Save button.   'auto', debounced autosave (add/remove/reorder/edit).
 const save = async ({ mode = 'explicit' } = {}) => {
   if (!canSave.value) {
-    console.debug('[save] skipped — canSave is false', {
+    console.debug('[save] skipped, canSave is false', {
       title: title.value.trim(), items: items.value.length,
       hasChanges: hasChanges.value, isSmart: isSmart.value,
     })
     return
   }
 
-  // If the user clicked Save while a debounce was pending, cancel the timer —
+  // If the user clicked Save while a debounce was pending, cancel the timer -
   // the explicit save covers it.
   if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null }
   autoSavePending.value = false
@@ -307,7 +307,7 @@ const dismissGuard = () => resolveLeave(false)
 const saveAndContinue = async () => {
   leaveGuard.value = false        // hide the guard; save runs in the background
   await save({ mode: 'explicit' })
-  // Continue only if the save actually persisted — a failure leaves edits in place.
+  // Continue only if the save actually persisted, a failure leaves edits in place.
   resolveLeave(!lastSaveFailed.value && !hasChanges.value && !isSaving.value)
 }
 const attemptBack = async () => {
@@ -329,7 +329,7 @@ const deleteCollection = async () => {
 
 // ── Reload (in-app refresh) ──
 const reload = async () => {
-  // Reloading overwrites local edits — guard unsaved work first.
+  // Reloading overwrites local edits, guard unsaved work first.
   if (hasUnsaved.value && !(await confirmLeave())) return
   const start = Date.now()
   isLoading.value = true
@@ -357,7 +357,7 @@ const cancelChanges = () => {
 }
 
 // Skip the watch on initial load. We use flush: 'sync' so the watcher runs SYNCHRONOUSLY
-// when title.value changes inside loadCollection — at that moment isLoading is still true,
+// when title.value changes inside loadCollection, at that moment isLoading is still true,
 // so markChanged is correctly skipped. The default 'pre' flush queues watchers as microtasks
 // that run AFTER the finally clause flips isLoading=false, defeating the guard.
 watch(title,   () => { if (!isLoading.value && !reverting) markChanged() }, { flush: 'sync' })
@@ -366,7 +366,7 @@ watch(summary, () => { if (!isLoading.value && !reverting) markChanged() }, { fl
 
 <template>
   <div>
-    <!-- Unsaved-changes leave guard (custom — for in-app back navigation) -->
+    <!-- Unsaved-changes leave guard (custom, for in-app back navigation) -->
     <Teleport to="body">
       <Transition name="fade">
         <div v-if="leaveGuard"
@@ -399,7 +399,7 @@ watch(summary, () => { if (!isLoading.value && !reverting) markChanged() }, { fl
       </Transition>
     </Teleport>
 
-    <!-- Sticky action bar — identity row + save row. Sticks just under the page header. -->
+    <!-- Sticky action bar, identity row + save row. Sticks just under the page header. -->
     <div class="sticky top-12 z-20 -mx-4 px-4 py-3 mb-4 bg-dark-900/90 backdrop-blur-xl border-b border-white/10">
 
       <!-- Row 1: back · title (pencil to the right) · status · reload · delete -->
@@ -413,7 +413,7 @@ watch(summary, () => { if (!isLoading.value && !reverting) markChanged() }, { fl
           </svg>
         </button>
 
-        <!-- Editable title — pencil affordance sits to the RIGHT of the text -->
+        <!-- Editable title, pencil affordance sits to the RIGHT of the text -->
         <div class="flex-1 min-w-0 flex items-center gap-1.5 group">
           <input ref="titleInput"
                  v-model="title"
@@ -432,7 +432,7 @@ watch(summary, () => { if (!isLoading.value && !reverting) markChanged() }, { fl
           </button>
         </div>
 
-        <!-- Status pill (desktop only — the Save button conveys state on mobile) -->
+        <!-- Status pill (desktop only, the Save button conveys state on mobile) -->
         <span class="hidden sm:inline-flex justify-end min-w-[60px] text-[10px] uppercase tracking-wider flex-shrink-0">
           <span v-if="isSaving" class="text-purple-300 flex items-center gap-1">
             <svg class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -441,7 +441,7 @@ watch(summary, () => { if (!isLoading.value && !reverting) markChanged() }, { fl
             </svg>
             Saving
           </span>
-          <span v-else-if="lastSaveFailed" class="text-red-400" title="Save failed — your edits are still here; try again">Save failed</span>
+          <span v-else-if="lastSaveFailed" class="text-red-400" title="Save failed, your edits are still here; try again">Save failed</span>
           <span v-else-if="autoSavePending" class="text-amber-400/80" title="Auto-save will fire shortly">Pending</span>
           <span v-else-if="hasChanges" class="text-amber-400">Unsaved</span>
           <span v-else-if="justSaved" class="text-emerald-400">Saved</span>
@@ -498,7 +498,7 @@ watch(summary, () => { if (!isLoading.value && !reverting) markChanged() }, { fl
       <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/>
       </svg>
-      Managed by <strong class="mx-1">Kometa</strong> — changes may be overwritten at 3:00 AM
+      Managed by <strong class="mx-1">Kometa</strong>, changes may be overwritten at 3:00 AM
     </div>
 
     <!-- Summary -->

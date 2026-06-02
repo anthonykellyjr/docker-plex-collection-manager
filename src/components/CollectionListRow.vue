@@ -1,7 +1,7 @@
 <script setup>
 import { ref } from 'vue'
 
-// One row in the ranked LIST view — rank · thumbnail · title/year · remove.
+// One row in the ranked LIST view, rank · thumbnail · title/year · remove.
 // Mirrors PosterCard's data shape; the parent VueDraggable handles reordering
 // (drag by the handle so the remove button stays clickable).
 const props = defineProps({

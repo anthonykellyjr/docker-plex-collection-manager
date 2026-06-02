@@ -11,6 +11,9 @@ backend/poster-cache/
 .env
 *.local
 
+# Private extension, not part of the public project
+backend/kelly_routes.py
+
 # Python
 __pycache__/
 *.pyc

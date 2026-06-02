@@ -3,8 +3,8 @@ import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useApi } from '../composables/useApi.js'
 
 // Tabbed "add a film" sidebar shared by CollectionDetail + NewCollection.
-//   Search tab — type-to-find (existing behaviour).
-//   Recent tab — newest-added films, lazy-loaded, so you can browse-and-add.
+//   Search tab, type-to-find (existing behaviour).
+//   Recent tab, newest-added films, lazy-loaded, so you can browse-and-add.
 const props = defineProps({
   libraryKey: { type: String, required: true },
   addedKeys: { type: Set, default: () => new Set() }, // ratingKeys already in the collection
@@ -115,7 +115,7 @@ watch(() => props.libraryKey, () => {
   }
 })
 
-// Warm the Recent list in the background so switching to it is instant — but yield
+// Warm the Recent list in the background so switching to it is instant, but yield
 // to the collection's own content load first (run when the main thread goes idle).
 const scheduleIdle = (fn) => {
   if (typeof requestIdleCallback === 'function') requestIdleCallback(fn, { timeout: 1500 })

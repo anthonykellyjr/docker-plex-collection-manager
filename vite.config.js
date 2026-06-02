@@ -1,32 +1,25 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import { idleShutdown } from './vite/idle-shutdown.js'
 
+// Served at the domain root by default. Set VITE_BASE (e.g. /collections/) to host
+// it under a sub-path. VITE_API_TARGET points the dev proxy at the running backend.
 export default defineConfig({
-  plugins: [vue(), idleShutdown()],
-  base: '/collections/',
+  plugins: [vue()],
+  base: process.env.VITE_BASE || '/',
   server: {
-    open: '/collections/',
     proxy: {
       '/capi': {
-        // Dev only: Vite runs inside a node:22-alpine container, so localhost is the
-        // container, not the host. Reach the host-published collection-api (5060->5000)
-        // via host.docker.internal (the dev container is started with --add-host).
-        target: 'http://host.docker.internal:5060',
-        changeOrigin: true
-      }
-    }
+        target: process.env.VITE_API_TARGET || 'http://localhost:5060',
+        changeOrigin: true,
+      },
+    },
   },
   build: {
     outDir: 'dist',
-    emptyDirOnBuild: true,
+    emptyOutDir: true,
     minify: 'esbuild',
     rollupOptions: {
-      output: {
-        manualChunks: {
-          'vue': ['vue']
-        }
-      }
-    }
-  }
+      output: { manualChunks: { vue: ['vue'] } },
+    },
+  },
 })

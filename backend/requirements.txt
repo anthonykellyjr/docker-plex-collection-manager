@@ -3,3 +3,4 @@ flask-cors
 requests
 plexapi
 pyyaml
+gunicorn

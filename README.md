@@ -1,4 +1,4 @@
-# Collection Manager — Drag-and-Drop Plex Collections
+# Plex Collection Manager
 
 ![Vue](https://img.shields.io/badge/Vue-3-42b883)
 ![Vite](https://img.shields.io/badge/Vite-5-646cff)
@@ -7,152 +7,122 @@
 ![plexapi](https://img.shields.io/badge/plexapi-powered-e5a00d)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-A fast, Letterboxd-style web app for building and curating **Plex collections** by hand.
-Search your library, drag posters into the order you want, rename and describe the
-collection, and push it straight to your Plex Media Server — all from the browser.
+A Letterboxd-style web app for building and ranking **Plex collections** by hand.
+Search your library, drag posters (or rows) into the order you want, rename the
+collection, and it saves straight to your Plex Media Server. The whole thing runs
+in two small containers.
 
-Built as a Vue 3 single-page app backed by a small Flask + [`python-plexapi`](https://github.com/pkkid/python-plexapi)
-service. Designed to run behind nginx on a home media server.
+I built it because Plex's own collection editing is clunky, and I wanted to rank
+movies by recommendation order, not alphabetically.
 
----
+## Quickstart (no Plex needed)
 
-## Features
+There's a demo mode with fake libraries and collections, so you can try it without
+a server or any tokens:
 
-- **Drag-and-drop ordering** — reorder a collection's posters with a live, animated grid.
-- **Inline search & add** — an always-visible library search panel; click to add a film.
-- **Auto-save with confirmation** — title, description, and add/remove changes save
-  automatically (debounced) and surface a clear "Synced to Plex" modal; reordering is a
-  deliberate **Save** so you can arrange freely first.
-- **Unsaved-changes guard** — leaving (back, logo, library switch, logout, reload, or tab
-  close) with pending changes prompts a custom Save / Discard / Cancel dialog.
-- **Reload** — refetch the collection from Plex on demand, with a success/error toast.
-- **Kometa-aware** — flags collections managed by [Kometa](https://kometa.wiki/) so you
-  know when changes may be overwritten on the next run.
-- **Smart-collection safe** — read-only handling for smart collections (no accidental edits).
-- **Per-save Plex stats** — the save modal reports API calls, reorder ops, and throughput.
+```bash
+git clone https://github.com/anthonykellyjr/plex-collection-manager
+cd plex-collection-manager
+docker compose up --build
+```
 
----
+Open http://localhost:8080 and log in with the key `demo`. Make a collection, drag
+things around, switch between list and grid. Nothing hits a real server, and it
+resets when you restart.
+
+## Point it at your Plex
+
+Same two containers, real data:
+
+1. Copy `.env.example` to `.env`.
+2. Set `DEMO_MODE=0` and fill in `PLEX_URL`, `PLEX_TOKEN`, and an `ADMIN_KEY` you pick.
+3. `docker compose up --build`, then open http://localhost:8080 and log in with your `ADMIN_KEY`.
+
+`ADMIN_KEY` is just the app's login (sent as the `X-Admin-Key` header). Here's how to
+[find your Plex token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/).
+
+## What it does
+
+- **Drag to reorder.** Posters in a grid, or a ranked row list like a Letterboxd diary. The list makes ranking easy; the toggle remembers which you used.
+- **Search or browse to add.** Type to find a film, or flip to a Recent tab and add from the newest in your library.
+- **Saves in the background.** Add, remove, rename, reorder, it all autosaves. A small status and a toast tell you it synced, no modal blocking the page.
+- **Fast posters.** The backend caches resized posters on disk and only ever asks Plex for the size it needs, so it stays light on the server.
+- **Kometa-aware.** Flags collections managed by [Kometa](https://kometa.wiki/) so you don't fight a tool that's going to overwrite you.
+- **Smart collections are read-only**, so you can't break a rule-based one by accident.
 
 ## Screenshots
 
-> _Add screenshots to `docs/` and reference them here, e.g._
->
-> `![Collection editor](docs/editor.png)`
-
----
-
-## Architecture
+Drop images in `docs/screenshots/` and link them here, for example:
 
 ```
-┌──────────────────────────┐        /collections/ (static)        ┌───────────────┐
-│  Vue 3 SPA (this repo)    │  ───────────────────────────────▶   │     nginx     │
-│  Vite build → dist/       │                                      │  (web-router) │
-└──────────────────────────┘                                      └──────┬────────┘
-                                                                          │ /capi/* proxy
-                                                                          ▼
-                                                       ┌──────────────────────────────┐
-                                                       │  collection-api (Flask)        │
-                                                       │  backend/api.py + python-plexapi│
-                                                       │  → Plex Media Server            │
-                                                       └──────────────────────────────┘
+![Editor](docs/screenshots/editor.png)
+![List view](docs/screenshots/list.png)
 ```
 
-- **Frontend** (`src/`): Vue 3 + Vite + Tailwind. Served as static files at `/collections/`.
-- **Backend** (`backend/`): Flask API proxied at `/capi/`. Talks to Plex via `python-plexapi`.
-- **Vendored shared UI** (`src/shared/`): `PageHeader`, `HubButton`, `PasswordInput`,
-  the `useApi` fetch wrapper, and shared styles — copied in so this repo is self-contained.
-
----
-
-## Project structure
+## How it works
 
 ```
-collection-manager/
+browser ──>  nginx  ──/────────>  built Vue app (static)
+                    ──/capi/──>   Flask API  ──>  Plex Media Server
+```
+
+- **web**: builds the Vue app and serves it with nginx, which also proxies `/capi` to the API.
+- **api**: a small Flask service using [python-plexapi](https://github.com/pkkid/python-plexapi). In demo mode it serves the fixtures in `backend/demo.py` instead.
+
+Two containers, one `docker compose up`. No database, collections live in Plex.
+
+## Project layout
+
+```
+.
+├── docker-compose.yml      # web + api, demo mode by default
+├── Dockerfile              # frontend: vite build -> nginx
+├── nginx.conf              # serves the app, proxies /capi -> api
 ├── index.html
-├── package.json            # standalone (no monorepo workspace)
-├── vite.config.js          # base: /collections/, /capi dev proxy, idle-shutdown
-├── tailwind.config.js
-├── postcss.config.js
-├── vite/
-│   └── idle-shutdown.js     # auto-stops the dev server after 30 min idle
+├── vite.config.js
 ├── src/
-│   ├── main.js
-│   ├── style.css
 │   ├── App.vue
-│   ├── components/          # AuthGate, CollectionDetail, CollectionsGrid, PosterCard, …
-│   ├── composables/
-│   │   └── useApi.js         # X-Admin-Key fetch wrapper
-│   └── shared/              # vendored reusable UI (PageHeader, PasswordInput, …)
+│   ├── components/         # AuthGate, CollectionDetail, AddItemsPanel, PosterCard, ...
+│   ├── composables/        # useApi, useViewPreference
+│   └── shared/             # vendored UI bits so the repo is self-contained
 └── backend/
-    ├── api.py               # Flask collection API (proxied at /capi)
-    ├── Dockerfile
+    ├── Dockerfile          # gunicorn
+    ├── api.py              # the /capi endpoints
+    ├── demo.py             # in-memory data for demo mode
     └── requirements.txt
 ```
 
----
-
 ## Configuration
 
-The backend reads all secrets from the environment (nothing is hardcoded). Copy
-[`.env.example`](.env.example) to `.env` and fill in:
+The API reads everything from the environment. Nothing is hardcoded.
 
-| Variable     | Required | Description                                            |
-|--------------|----------|--------------------------------------------------------|
-| `PLEX_URL`   | no       | Plex base URL. Defaults to `http://10.0.0.222:32400`.  |
-| `PLEX_TOKEN` | yes      | Plex server token (`X-Plex-Token`).                    |
-| `ADMIN_KEY`  | yes      | Key required by every `/capi` endpoint (`X-Admin-Key`).|
-| `KELLY_KEY`  | yes      | Access code for the Kelly Collection endpoints.        |
-
----
+| Variable           | Default                              | What it's for                                              |
+|--------------------|--------------------------------------|------------------------------------------------------------|
+| `DEMO_MODE`        | `1`                                  | Run with fake data and no Plex. Set `0` for a real server. |
+| `PLEX_URL`         | `http://host.docker.internal:32400`  | Your Plex base URL.                                        |
+| `PLEX_TOKEN`       | (none)                               | Plex server token. Required when `DEMO_MODE=0`.            |
+| `ADMIN_KEY`        | `demo` in demo mode                  | The app's login key. Required when `DEMO_MODE=0`.          |
+| `WEB_PORT`         | `8080`                               | Host port for the web UI.                                  |
+| `GUNICORN_WORKERS` | `1`                                  | API workers. Demo needs 1; raise it for real use.         |
 
 ## Development
 
-Node is not required on the host — develop inside Docker with hot-reload:
+Node isn't required on the host. Run the dev server in a container with hot reload,
+pointed at a running backend:
 
 ```bash
-docker run --rm -it \
-  -v "$(pwd):/app" -w /app \
-  -p 5173:5173 \
-  --add-host=host.docker.internal:host-gateway \
-  node:22-alpine \
-  sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
-```
-
-Then open `http://localhost:5173/collections/`. The dev server proxies `/capi/*` to a
-running `collection-api` on the host at `:5060` (via `host.docker.internal`), and
-auto-shuts down after 30 minutes of inactivity.
-
----
-
-## Build
-
-```bash
-docker run --rm -v "$(pwd):/app" -w /app node:22-alpine \
-  sh -c "npm install && npm run build"
-```
-
-Outputs static files to `dist/`, ready to serve at `/collections/`.
-
-### Backend
-
-```bash
-docker build -t collection-api ./backend
+# backend on :5060
 docker run --rm -p 5060:5000 --env-file .env collection-api
+
+# vite dev server on :5173
+docker run --rm -it -v "$(pwd):/app" -w /app -p 5173:5173 \
+  --add-host=host.docker.internal:host-gateway \
+  -e VITE_API_TARGET=http://host.docker.internal:5060 \
+  node:22-alpine sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
 ```
 
----
-
-## Deployment notes
-
-On the home server this runs as two pieces:
-
-- **nginx** serves `dist/` at `/collections/` and proxies `/capi/*` to the backend.
-- **collection-api** (the `backend/` image) runs on `:5060`, with `plex.tv` /
-  `app.plex.tv` pinned to `127.0.0.1` so `python-plexapi` can't re-register the
-  server's identity on plex.tv.
-
----
+Then open http://localhost:5173.
 
 ## License
 
-[MIT](LICENSE) © 2026 Anthony Kelly
+[MIT](LICENSE) © Anthony Kelly
