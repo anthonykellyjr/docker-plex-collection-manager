@@ -7,6 +7,7 @@ const props = defineProps({
   removable: { type: Boolean, default: false },
   compact: { type: Boolean, default: false },
   position: { type: Number, default: 0 },
+  size: { type: String, default: 'full' }, // 'full' (grid 300x450) | 'thumb' (120x180)
 })
 
 defineEmits(['click', 'remove'])
@@ -15,7 +16,10 @@ const loaded = ref(false)
 const errored = ref(false)
 
 const adminKey = localStorage.getItem('collection_manager_admin_key') || ''
-const posterSrc = props.item.thumb ? `${props.item.thumb}?k=${encodeURIComponent(adminKey)}` : null
+const [pw, ph] = props.size === 'thumb' ? [120, 180] : [300, 450]
+const posterSrc = props.item.thumb
+  ? `${props.item.thumb}?k=${encodeURIComponent(adminKey)}&w=${pw}&h=${ph}`
+  : null
 </script>
 
 <template>
@@ -33,9 +37,10 @@ const posterSrc = props.item.thumb ? `${props.item.thumb}?k=${encodeURIComponent
       <img v-if="posterSrc && !errored"
            :src="posterSrc"
            :alt="item.title"
-           class="w-full h-full object-cover"
+           class="w-full h-full object-cover transition-opacity duration-300"
            :class="{ 'opacity-0': !loaded }"
            loading="lazy"
+           decoding="async"
            @load="loaded = true"
            @error="errored = true">
 

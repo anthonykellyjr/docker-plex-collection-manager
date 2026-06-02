@@ -4,21 +4,21 @@
 //
 // API:
 //   props:
-//     - title     (required)   — h1 text
-//     - subtitle  (optional)   — small text under the title
-//     - logo      (optional)   — image src; omit to show no logo
-//     - logoAlt   (optional)   — alt text for the logo
-//     - hideBack  (optional)   — set true to suppress the default HubButton
-//     - variant   (optional)   — 'card' (default, free-standing rounded card,
-//                                stacks on mobile — use on landing-style pages
+//     - title     (required)  , h1 text
+//     - subtitle  (optional)  , small text under the title
+//     - logo      (optional)  , image src; omit to show no logo
+//     - logoAlt   (optional)  , alt text for the logo
+//     - hideBack  (optional)  , set true to suppress the default HubButton
+//     - variant   (optional)  , 'card' (default, free-standing rounded card,
+//                                stacks on mobile, use on landing-style pages
 //                                like recently-added and tutorials) or 'bar'
-//                                (sticky top bar, single horizontal row —
+//                                (sticky top bar, single horizontal row -
 //                                use on app pages with persistent controls
 //                                like collection-manager and kelly-collection).
 //   slots:
-//     - default                — right-hand content (tabs, buttons, anything)
-//     - #back                  — overrides the default HubButton entirely
-//     - #title                 — overrides the entire title block (rich titles)
+//     - default               , right-hand content (tabs, buttons, anything)
+//     - #back                 , overrides the default HubButton entirely
+//     - #title                , overrides the entire title block (rich titles)
 //
 // Example:
 //   <PageHeader title="Recently Added" subtitle="in WebheadPlex" :logo="garfieldImg">

@@ -5,7 +5,7 @@ const props = defineProps({
   message:  { type: String,  default: '' },
   type:     { type: String,  default: 'success' }, // success | error
   show:     { type: Boolean, default: false },
-  duration: { type: Number,  default: 8000 },        // 8s — much harder to miss
+  duration: { type: Number,  default: 8000 },        // 8s, much harder to miss
 })
 
 const emit = defineEmits(['close'])

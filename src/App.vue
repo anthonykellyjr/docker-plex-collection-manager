@@ -89,7 +89,7 @@ const backToGrid = () => {
   gridRef.value?.refresh()
 }
 
-// Title/logo click — same as Back, but gated on unsaved changes in the editor.
+// Title/logo click, same as Back, but gated on unsaved changes in the editor.
 const goHome = async () => {
   if (await confirmLeaveDetail()) backToGrid()
 }
@@ -113,7 +113,7 @@ const onCollectionCreated = (newKey) => {
 watch(selectedLibrary, async (_newVal, oldVal) => {
   if (suppressLibraryGuard) return
   if (!(await confirmLeaveDetail())) {
-    // User cancelled — snap the dropdown back to the previous library.
+    // User cancelled, snap the dropdown back to the previous library.
     suppressLibraryGuard = true
     selectedLibrary.value = oldVal
     await nextTick()

@@ -10,6 +10,7 @@ const emit = defineEmits(['authenticated'])
 const keyInput = ref('')
 const isChecking = ref(false)
 const error = ref('')
+const demoHint = ref(false)
 
 const tryAuth = async () => {
   if (!keyInput.value.trim()) return
@@ -44,7 +45,19 @@ const autoCheck = async () => {
   }
 }
 
-autoCheck()
+const init = async () => {
+  // If the backend is in demo mode, hint the key so anyone can get in.
+  try {
+    const h = await apiFetch('/capi/health')
+    if (h && h.demo) {
+      demoHint.value = true
+      if (!adminKey.value) keyInput.value = 'demo'
+    }
+  } catch { /* ignore */ }
+  await autoCheck()
+}
+
+init()
 </script>
 
 <template>
@@ -52,6 +65,10 @@ autoCheck()
     <div class="bg-slate-950/60 backdrop-blur-xl border border-white/15 rounded-2xl p-8 max-w-sm w-full shadow-2xl">
       <h1 class="text-xl font-bold text-white mb-1">Collection Manager</h1>
       <p class="text-sm text-slate-400 mb-6">Enter admin key to continue</p>
+
+      <div v-if="demoHint" class="mb-5 px-3 py-2.5 bg-purple-500/10 border border-purple-500/30 rounded-xl text-xs text-purple-200">
+        Demo mode. The key is <span class="font-mono font-bold text-white">demo</span>. Nothing here touches a real Plex server.
+      </div>
 
       <div v-if="isChecking" class="flex justify-center py-8">
         <div class="flex gap-2">

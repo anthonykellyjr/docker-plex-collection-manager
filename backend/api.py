@@ -7,6 +7,8 @@ Proxied by nginx at /capi/
 import os
 import time
 import yaml
+import hashlib
+import threading
 import requests
 from functools import wraps
 from flask import Flask, request, jsonify, Response
@@ -15,8 +17,8 @@ from flask_cors import CORS
 # Prevent plexapi from phoning home to plex.tv
 # MUST be set before importing plexapi
 import plexapi
-plexapi.X_PLEX_IDENTIFIER = 'collection-manager-webhead'
-plexapi.BASE_HEADERS['X-Plex-Client-Identifier'] = 'collection-manager-webhead'
+plexapi.X_PLEX_IDENTIFIER = 'collection-manager'
+plexapi.BASE_HEADERS['X-Plex-Client-Identifier'] = 'collection-manager'
 plexapi.BASE_HEADERS['X-Plex-Provides'] = ''
 plexapi.BASE_HEADERS['X-Plex-Product'] = 'Collection Manager'
 plexapi.BASE_HEADERS['X-Plex-Version'] = '1.0.0'
@@ -26,17 +28,28 @@ from plexapi.server import PlexServer
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
-PLEX_URL = os.environ.get('PLEX_URL', 'http://10.0.0.222:32400')
-PLEX_TOKEN = os.environ['PLEX_TOKEN']
-ADMIN_KEY = os.environ['ADMIN_KEY']
-KELLY_KEY = os.environ['KELLY_KEY']
-KELLY_COLLECTION_TITLE = "Kelly's Collection"
+# DEMO_MODE runs the app with no Plex and no real secrets, it serves the fixture
+# data in demo.py instead. Handy for trying it out, and for the public demo.
+DEMO_MODE = os.environ.get('DEMO_MODE', '').lower() in ('1', 'true', 'yes', 'on')
+
+PLEX_URL = os.environ.get('PLEX_URL', 'http://host.docker.internal:32400')
+PLEX_TOKEN = os.environ.get('PLEX_TOKEN')
+# In demo mode the admin key defaults to "demo" so the login screen just works.
+ADMIN_KEY = os.environ.get('ADMIN_KEY') or ('demo' if DEMO_MODE else None)
+
+if not ADMIN_KEY:
+    raise RuntimeError('Set ADMIN_KEY (or DEMO_MODE=1)')
+if not DEMO_MODE and not PLEX_TOKEN:
+    raise RuntimeError('Set PLEX_TOKEN (or DEMO_MODE=1 to run without Plex)')
 
 KOMETA_MOVIE_YML = '/app/kometa/movie_collections.yml'
 KOMETA_TV_YML = '/app/kometa/tv_collections.yml'
 
 app = Flask(__name__)
 CORS(app)
+
+if DEMO_MODE:
+    import demo
 
 # =============================================================================
 # PLEX CONNECTION
@@ -72,6 +85,97 @@ def cached(key, ttl_seconds, fetcher):
         if entry:
             return entry['data']
         raise e
+
+# =============================================================================
+# POSTER CACHE (filesystem), Plex stream protection
+# =============================================================================
+# Plex's photo transcoder is hit ONCE per (ratingKey,size), ever, results are
+# written to disk and served from there. A semaphore caps how many transcodes
+# can run at Plex concurrently so a cold cache can't starve active streams.
+POSTER_CACHE_DIR = os.environ.get('POSTER_CACHE_DIR', '/cache')
+# Only two sizes are allowed, so the cache stays small and Plex only ever
+# transcodes these dimensions: small thumbs (rows) and grid posters.
+POSTER_SIZES = {(120, 180), (300, 450)}
+DEFAULT_POSTER_SIZE = (300, 450)
+# At most 3 simultaneous transcode requests to Plex (cache hits don't count).
+_plex_fetch_sem = threading.Semaphore(3)
+
+try:
+    os.makedirs(POSTER_CACHE_DIR, exist_ok=True)
+except OSError:
+    pass
+
+
+def _clamp_poster_size():
+    """Read w/h from the query string, clamp to the allowlist (default = grid)."""
+    try:
+        w = int(request.args.get('w', DEFAULT_POSTER_SIZE[0]))
+        h = int(request.args.get('h', DEFAULT_POSTER_SIZE[1]))
+    except (TypeError, ValueError):
+        return DEFAULT_POSTER_SIZE
+    return (w, h) if (w, h) in POSTER_SIZES else DEFAULT_POSTER_SIZE
+
+
+def serve_cached_poster(rating_key):
+    """Serve a poster from the on-disk cache, fetching from Plex once on a miss.
+
+    Honors If-None-Match (304) and sets a 30-day immutable cache header so the
+    browser caches too. Used by both the admin and Kelly poster routes.
+    """
+    w, h = _clamp_poster_size()
+    safe_key = str(rating_key).replace('/', '_')
+    path = os.path.join(POSTER_CACHE_DIR, f'{safe_key}_{w}x{h}.jpg')
+    etag = f'"{safe_key}-{w}x{h}"'
+
+    data = None
+    if os.path.exists(path):
+        try:
+            with open(path, 'rb') as fh:
+                data = fh.read()
+        except OSError:
+            data = None
+
+    if data is None:
+        # Cache miss, fetch from Plex under the concurrency cap.
+        # Use the PHOTO TRANSCODER (not /metadata/thumb, which ignores width/height
+        # and returns the full ~230KB original) so we get a real ~7-33KB resized
+        # image. Plex transcodes each poster size once, then it's served from disk.
+        with _plex_fetch_sem:
+            try:
+                resp = requests.get(
+                    f'{PLEX_URL}/photo/:/transcode',
+                    params={
+                        'X-Plex-Token': PLEX_TOKEN,
+                        'width': w,
+                        'height': h,
+                        'minSize': 1,
+                        'upscale': 1,
+                        'url': f'/library/metadata/{rating_key}/thumb',
+                    },
+                    timeout=10,
+                )
+            except Exception:
+                return Response('Error', status=500)
+        if resp.status_code != 200:
+            return Response('Not found', status=404)
+        data = resp.content
+        try:
+            tmp = f'{path}.{os.getpid()}.tmp'
+            with open(tmp, 'wb') as fh:
+                fh.write(data)
+            os.replace(tmp, path)  # atomic, no torn reads under concurrency
+        except OSError:
+            pass
+
+    if request.headers.get('If-None-Match') == etag:
+        return Response(status=304, headers={'ETag': etag,
+                                             'Cache-Control': 'public, max-age=2592000, immutable'})
+
+    return Response(data, headers={
+        'Content-Type': 'image/jpeg',
+        'Cache-Control': 'public, max-age=2592000, immutable',
+        'ETag': etag,
+    })
 
 def invalidate_cache(prefix=''):
     keys_to_delete = [k for k in _cache if k.startswith(prefix)] if prefix else list(_cache.keys())
@@ -115,25 +219,6 @@ def require_admin(f):
         return f(*args, **kwargs)
     return decorated
 
-def require_kelly(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        key = request.headers.get('X-Kelly-Key') or request.args.get('k')
-        if key != KELLY_KEY:
-            return jsonify({'error': 'Unauthorized'}), 401
-        return f(*args, **kwargs)
-    return decorated
-
-def get_kelly_collection():
-    """Find Kelly's Collection in the Movies library."""
-    server = get_server()
-    for section in server.library.sections():
-        if section.type == 'movie':
-            for col in section.collections():
-                if col.title == KELLY_COLLECTION_TITLE:
-                    return col, section
-    return None, None
-
 # =============================================================================
 # HELPER: serialize items
 # =============================================================================
@@ -167,12 +252,15 @@ def serialize_collection(col, include_kometa=True):
 
 @app.route('/capi/health')
 def health():
-    return jsonify({'status': 'ok'})
+    return jsonify({'status': 'ok', 'demo': DEMO_MODE})
 
 
 @app.route('/capi/libraries')
 @require_admin
 def list_libraries():
+    if DEMO_MODE:
+        return demo.list_libraries()
+
     def fetch():
         server = get_server()
         sections = server.library.sections()
@@ -204,12 +292,15 @@ def get_library_items(key):
     sort = request.args.get('sort', 'titleSort')
     offset = (page - 1) * size
 
+    if DEMO_MODE:
+        return demo.get_library_items(page, size, search, sort)
+
     try:
         server = get_server()
         section = server.library.sectionByID(int(key))
 
         if search:
-            # Search returns all matches — paginate in Python
+            # Search returns all matches, paginate in Python
             cache_key = f'search:{key}:{search}'
             def do_search():
                 results = section.search(title=search)
@@ -217,6 +308,22 @@ def get_library_items(key):
             all_results = cached(cache_key, 60, do_search)
             total = len(all_results)
             items = all_results[offset:offset + size]
+        elif sort == 'addedAt':
+            # Newest-added first, fetched server-side ONE PAGE at a time. Plex sorts
+            # and slices via the container args (~40ms/page), so we never pull the
+            # whole library just to show the latest 50. The container-pagination
+            # caveat that bites section.all() does NOT apply to a sorted search -
+            # verified reliable across pages on this server.
+            def do_recent():
+                results = section.search(
+                    sort='addedAt:desc',
+                    container_start=offset,
+                    container_size=size,
+                    maxresults=size,
+                )
+                return [serialize_item(item) for item in results]
+            items = cached(f'recent:{key}:{offset}:{size}', 60, do_recent)
+            total = cached(f'recent_total:{key}', 60, lambda: section.totalSize)
         else:
             # Fetch all and cache, then slice for pagination
             # plexapi container_start/container_size are unreliable
@@ -242,32 +349,17 @@ def get_library_items(key):
 @app.route('/capi/poster/<rating_key>')
 @require_admin
 def get_poster(rating_key):
-    try:
-        resp = requests.get(
-            f'{PLEX_URL}/library/metadata/{rating_key}/thumb',
-            params={
-                'X-Plex-Token': PLEX_TOKEN,
-                'width': 300,
-                'height': 450,
-            },
-            stream=True,
-            timeout=10,
-        )
-        if resp.status_code != 200:
-            return Response('Not found', status=404)
-
-        headers = {
-            'Content-Type': resp.headers.get('Content-Type', 'image/jpeg'),
-            'Cache-Control': 'public, max-age=86400, immutable',
-        }
-        return Response(resp.iter_content(8192), headers=headers)
-    except Exception:
-        return Response('Error', status=500)
+    if DEMO_MODE:
+        return demo.get_poster(rating_key)
+    return serve_cached_poster(rating_key)
 
 
 @app.route('/capi/libraries/<key>/collections')
 @require_admin
 def get_library_collections(key):
+    if DEMO_MODE:
+        return demo.get_library_collections()
+
     def fetch():
         server = get_server()
         section = server.library.sectionByID(int(key))
@@ -286,6 +378,8 @@ def get_library_collections(key):
 @app.route('/capi/collections/<rating_key>/items')
 @require_admin
 def get_collection_items(rating_key):
+    if DEMO_MODE:
+        return demo.get_collection_items(rating_key)
     try:
         server = get_server()
         collection = server.fetchItem(int(rating_key))
@@ -305,6 +399,9 @@ def create_collection():
     data = request.get_json()
     if not data:
         return jsonify({'error': 'No data provided'}), 400
+
+    if DEMO_MODE:
+        return demo.create_collection(data)
 
     library_key = data.get('libraryKey')
     title = data.get('title', '').strip()
@@ -352,6 +449,9 @@ def update_collection(rating_key):
     data = request.get_json()
     if not data:
         return jsonify({'error': 'No data provided'}), 400
+
+    if DEMO_MODE:
+        return demo.update_collection(rating_key, data)
 
     title = data.get('title')
     summary = data.get('summary')
@@ -448,6 +548,8 @@ def update_collection(rating_key):
 @app.route('/capi/collections/<rating_key>', methods=['DELETE'])
 @require_admin
 def delete_collection(rating_key):
+    if DEMO_MODE:
+        return demo.delete_collection(rating_key)
     try:
         server = get_server()
         collection = server.fetchItem(int(rating_key))
@@ -473,6 +575,9 @@ def reorder_collections(key):
     if not collection_keys:
         return jsonify({'error': 'collectionKeys required'}), 400
 
+    if DEMO_MODE:
+        return demo.reorder_collections(data)
+
     try:
         server = get_server()
         for idx, rk in enumerate(collection_keys):
@@ -491,178 +596,33 @@ def reorder_collections(key):
 
 
 # =============================================================================
-# KELLY'S COLLECTION ENDPOINTS
+# OPTIONAL PRIVATE EXTENSIONS
 # =============================================================================
-
-def kelly_serialize_item(item):
-    return {
-        'ratingKey': str(item.ratingKey),
-        'title': item.title,
-        'year': getattr(item, 'year', None),
-        'type': item.type,
-        'thumb': f'/capi/kelly/poster/{item.ratingKey}' if item.thumb else None,
-        'addedAt': item.addedAt.isoformat() if getattr(item, 'addedAt', None) else None,
-    }
-
-@app.route('/capi/kelly/collection')
-@require_kelly
-def kelly_get_collection():
-    try:
-        collection, section = get_kelly_collection()
-        if not collection:
-            return jsonify({'error': "Kelly's Collection not found"}), 404
-        items = collection.items()
-        return jsonify({
-            'collection': serialize_collection(collection, include_kometa=False),
-            'items': [kelly_serialize_item(item) for item in items],
-        })
-    except Exception as e:
-        reset_server()
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/capi/kelly/collection', methods=['PUT'])
-@require_kelly
-def kelly_update_collection():
-    t_start = time.time()
-    data = request.get_json()
-    if not data:
-        return jsonify({'error': 'No data provided'}), 400
-
-    item_keys = data.get('itemKeys')
-    if item_keys is None:
-        return jsonify({'error': 'itemKeys required'}), 400
-
-    stats = {'added': 0, 'removed': 0, 'reordered': 0, 'plexCalls': 0}
-
-    try:
-        collection, section = get_kelly_collection()
-        if not collection:
-            return jsonify({'error': "Kelly's Collection not found"}), 404
-        stats['plexCalls'] += 1
-
-        current_items = collection.items()
-        stats['plexCalls'] += 1
-        current_keys = set(str(item.ratingKey) for item in current_items)
-        new_keys = set(item_keys)
-
-        server = get_server()
-
-        # Add new items
-        to_add = [k for k in item_keys if k not in current_keys]
-        if to_add:
-            add_items = []
-            for rk in to_add:
-                try:
-                    add_items.append(server.fetchItem(int(rk)))
-                    stats['plexCalls'] += 1
-                except Exception:
-                    pass
-            if add_items:
-                collection.addItems(add_items)
-                stats['plexCalls'] += 1
-                stats['added'] = len(add_items)
-
-        # Remove items no longer in the list
-        to_remove = [item for item in current_items if str(item.ratingKey) not in new_keys]
-        if to_remove:
-            collection.removeItems(to_remove)
-            stats['plexCalls'] += 1
-            stats['removed'] = len(to_remove)
-
-        # Reorder
-        if len(item_keys) > 1:
-            refreshed = collection.items()
-            stats['plexCalls'] += 1
-            items_map = {str(i.ratingKey): i for i in refreshed}
-
-            first = items_map.get(item_keys[0])
-            if first:
-                try:
-                    collection.moveItem(first)
-                    stats['plexCalls'] += 1
-                    stats['reordered'] += 1
-                except Exception:
-                    pass
-
-            for i in range(1, len(item_keys)):
-                current = items_map.get(item_keys[i])
-                prev = items_map.get(item_keys[i - 1])
-                if current and prev:
-                    try:
-                        collection.moveItem(current, after=prev)
-                        stats['plexCalls'] += 1
-                        stats['reordered'] += 1
-                    except Exception:
-                        pass
-
-        invalidate_cache('collections:')
-
-        elapsed = round(time.time() - t_start, 2)
-        stats['elapsed'] = elapsed
-        stats['totalItems'] = len(item_keys)
-
-        return jsonify({'success': True, 'stats': stats})
-    except Exception as e:
-        reset_server()
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/capi/kelly/search')
-@require_kelly
-def kelly_search():
-    search = request.args.get('q', '').strip()
-    if not search:
-        return jsonify({'items': []})
-
-    try:
-        # Use the same library that contains Kelly's collection
-        collection, section = get_kelly_collection()
-        if not section:
-            return jsonify({'error': 'Movies library not found'}), 404
-
-        cache_key = f'kelly_search:{search}'
-        def do_search():
-            results = section.search(title=search)
-            return [kelly_serialize_item(item) for item in results[:20]]
-        items = cached(cache_key, 60, do_search)
-        return jsonify({'items': items})
-    except Exception as e:
-        reset_server()
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/capi/kelly/poster/<rating_key>')
-@require_kelly
-def kelly_get_poster(rating_key):
-    try:
-        resp = requests.get(
-            f'{PLEX_URL}/library/metadata/{rating_key}/thumb',
-            params={
-                'X-Plex-Token': PLEX_TOKEN,
-                'width': 300,
-                'height': 450,
-            },
-            stream=True,
-            timeout=10,
-        )
-        if resp.status_code != 200:
-            return Response('Not found', status=404)
-
-        headers = {
-            'Content-Type': resp.headers.get('Content-Type', 'image/jpeg'),
-            'Cache-Control': 'public, max-age=86400, immutable',
-        }
-        return Response(resp.iter_content(8192), headers=headers)
-    except Exception:
-        return Response('Error', status=500)
+# Loaded only if a kelly_routes.py is sitting next to this file. It isn't in the
+# repo, so this is a no-op for everyone but me. Keeps a personal feature off the
+# public project without forking the code.
+try:
+    import kelly_routes
+    kelly_routes.register_kelly(
+        app,
+        get_server=get_server,
+        reset_server=reset_server,
+        cached=cached,
+        serialize_collection=serialize_collection,
+        serve_cached_poster=serve_cached_poster,
+    )
+except ImportError:
+    pass
+except Exception as e:
+    print(f'kelly_routes not loaded: {e}')
 
 
 # =============================================================================
 # RUN
 # =============================================================================
 if __name__ == '__main__':
-    print(f"Collection Manager API starting...")
-    print(f"Plex URL: {PLEX_URL}")
-    print(f"Kometa titles loaded: {len(_kometa_titles)}")
+    print('Collection Manager API starting')
+    print(f'Demo mode: {DEMO_MODE}')
+    if not DEMO_MODE:
+        print(f'Plex URL: {PLEX_URL}')
     app.run(host='0.0.0.0', port=5000, debug=False)

@@ -48,7 +48,7 @@ const fetchCollections = async () => {
 }
 
 watch(() => props.libraryKey, () => {
-  // Library switched — cancel any pending auto-save for the old library.
+  // Library switched, cancel any pending auto-save for the old library.
   if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null }
   autoSavePending.value = false
   fetchCollections()
@@ -159,7 +159,7 @@ defineExpose({ refresh })
       </div>
     </div>
 
-    <!-- Big inline "Saved" flash banner — unmissable confirmation after auto-save. -->
+    <!-- Big inline "Saved" flash banner, unmissable confirmation after auto-save. -->
     <Transition name="flash">
       <div v-if="autoSavedFlash"
            class="flex items-center gap-2 p-3 mb-4 bg-emerald-600/15 border border-emerald-500/40 rounded-xl text-sm text-emerald-200 font-medium">
@@ -185,7 +185,7 @@ defineExpose({ refresh })
       <p class="text-sm mt-1">Create your first collection to get started</p>
     </div>
 
-    <!-- Sortable collection grid — 3 cols on mobile, 4 on desktop. Each card uses
+    <!-- Sortable collection grid, 3 cols on mobile, 4 on desktop. Each card uses
          the true 2:3 poster ratio, so heights scale naturally with width. -->
     <VueDraggable
       v-else
@@ -201,7 +201,7 @@ defineExpose({ refresh })
            @click="$emit('select', col.ratingKey)"
            class="group relative bg-slate-950/60 backdrop-blur-xl border border-white/15 rounded-xl overflow-hidden cursor-pointer transition-all duration-300 hover:border-purple-500/50 hover:shadow-[0_10px_30px_-8px_rgba(0,0,0,0.7),0_0_20px_rgba(168,85,247,0.2)]">
 
-        <!-- Drag handle — small enough to fit a thumbnail card -->
+        <!-- Drag handle, small enough to fit a thumbnail card -->
         <div class="drag-handle absolute top-1.5 left-1.5 z-10 w-7 h-7 bg-black/50 backdrop-blur-sm rounded-md flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-grab active:cursor-grabbing"
              @click.stop>
           <svg class="w-3.5 h-3.5 text-slate-300" fill="currentColor" viewBox="0 0 24 24">
@@ -223,7 +223,7 @@ defineExpose({ refresh })
           </span>
         </div>
 
-        <!-- Collection poster / gradient — true poster aspect ratio (no more chopped heads).
+        <!-- Collection poster / gradient, true poster aspect ratio (no more chopped heads).
              onerror="this.remove()" makes 404s (collections w/o a Plex poster) fall back
              to the v-else gradient cleanly instead of showing the broken-image icon. -->
         <div class="aspect-[2/3] relative overflow-hidden bg-gradient-to-br from-purple-900/40 to-slate-900">
@@ -236,7 +236,7 @@ defineExpose({ refresh })
           <div class="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent"></div>
         </div>
 
-        <!-- Info — tighter padding + smaller type for the smaller card -->
+        <!-- Info, tighter padding + smaller type for the smaller card -->
         <div class="p-2 pt-1.5 -mt-6 relative">
           <h3 class="text-xs sm:text-sm font-bold text-white truncate">{{ col.title }}</h3>
           <p class="text-[10px] text-slate-400 mt-0.5">{{ col.childCount }} item{{ col.childCount !== 1 ? 's' : '' }}</p>
