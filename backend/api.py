@@ -182,6 +182,19 @@ def invalidate_cache(prefix=''):
     for k in keys_to_delete:
         del _cache[k]
 
+def delete_poster_cache(rating_key):
+    """Drop cached poster files for a rating key, e.g. after its art changes."""
+    safe = str(rating_key).replace('/', '_')
+    try:
+        for name in os.listdir(POSTER_CACHE_DIR):
+            if name.startswith(f'{safe}_') and name.endswith('.jpg'):
+                try:
+                    os.remove(os.path.join(POSTER_CACHE_DIR, name))
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
 # =============================================================================
 # KOMETA DETECTION
 # =============================================================================
@@ -540,6 +553,31 @@ def update_collection(rating_key):
         stats['totalItems'] = len(item_keys) if item_keys else 0
 
         return jsonify({'success': True, 'stats': stats})
+    except Exception as e:
+        reset_server()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/capi/collections/<rating_key>/poster', methods=['POST'])
+@require_admin
+def set_collection_poster(rating_key):
+    data = request.get_json() or {}
+    item_key = data.get('ratingKey')
+    if not item_key:
+        return jsonify({'error': 'ratingKey required'}), 400
+
+    if DEMO_MODE:
+        return demo.set_collection_cover(rating_key, item_key)
+
+    try:
+        server = get_server()
+        collection = server.fetchItem(int(rating_key))
+        # Point the collection's poster at the chosen item's artwork.
+        thumb_url = f'{PLEX_URL}/library/metadata/{item_key}/thumb?X-Plex-Token={PLEX_TOKEN}'
+        collection.uploadPoster(url=thumb_url)
+        delete_poster_cache(rating_key)
+        invalidate_cache('collections:')
+        return jsonify({'success': True})
     except Exception as e:
         reset_server()
         return jsonify({'error': str(e)}), 500

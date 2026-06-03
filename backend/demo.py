@@ -110,13 +110,13 @@ def _item(key):
 
 def _collection(cid):
     c = _COLLECTIONS[cid]
-    first = c['items'][0] if c['items'] else None
+    cover = c.get('cover') or (c['items'][0] if c['items'] else None)
     return {
         'ratingKey': cid,
         'title': c['title'],
         'titleSort': c['title'],
         'summary': c['summary'],
-        'thumb': f'/capi/poster/{first}' if first else None,
+        'thumb': f'/capi/poster/{cover}' if cover else None,
         'smart': False,
         'childCount': len(c['items']),
         'kometaManaged': False,
@@ -191,6 +191,14 @@ def update_collection(cid, data):
         c['items'] = new
     stats['totalItems'] = len(c['items'])
     return jsonify({'success': True, 'stats': stats})
+
+
+def set_collection_cover(cid, item_key):
+    if cid not in _COLLECTIONS:
+        return jsonify({'error': 'Collection not found'}), 404
+    if item_key in _BY_KEY:
+        _COLLECTIONS[cid]['cover'] = item_key
+    return jsonify({'success': True})
 
 
 def delete_collection(cid):

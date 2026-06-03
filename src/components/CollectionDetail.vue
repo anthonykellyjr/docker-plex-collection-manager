@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { VueDraggable } from 'vue-draggable-plus'
 import { useApi } from '../composables/useApi.js'
 import { useViewPreference } from '../composables/useViewPreference.js'
+import { usePosterVersion } from '../composables/usePosterVersion.js'
 import PosterCard from './PosterCard.vue'
 import CollectionListRow from './CollectionListRow.vue'
 import AddItemsPanel from './AddItemsPanel.vue'
@@ -208,6 +209,22 @@ const addItem = (item) => {
 const removeItem = (item) => {
   items.value = items.value.filter(i => i.ratingKey !== item.ratingKey)
   markChanged()
+}
+
+// Set the collection's cover to one of its items' posters. Saves to Plex right
+// away (independent of the item list), then busts the poster so the grid updates.
+const { bump: bumpPoster } = usePosterVersion()
+const setCover = async (item) => {
+  try {
+    await apiFetch(`/capi/collections/${props.collectionKey}/poster`, {
+      method: 'POST',
+      body: JSON.stringify({ ratingKey: item.ratingKey }),
+    })
+    bumpPoster(props.collectionKey)
+    emit('toast', 'Cover updated', 'success')
+  } catch (e) {
+    emit('toast', e.message || 'Failed to set cover', 'error')
+  }
 }
 
 const onDragEnd = (e) => {
@@ -578,7 +595,9 @@ watch(summary, () => { if (!isLoading.value && !reverting) markChanged() }, { fl
               :item="item"
               :position="idx + 1"
               :removable="!isSmart"
+              :coverable="!isSmart"
               @remove="removeItem"
+              @cover="setCover"
             />
           </VueDraggable>
 
@@ -597,7 +616,9 @@ watch(summary, () => { if (!isLoading.value && !reverting) markChanged() }, { fl
               :item="item"
               :position="idx + 1"
               :removable="!isSmart"
+              :coverable="!isSmart"
               @remove="removeItem"
+              @cover="setCover"
             />
           </VueDraggable>
         </div>
