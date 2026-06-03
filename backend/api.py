@@ -293,7 +293,7 @@ def get_library_items(key):
     offset = (page - 1) * size
 
     if DEMO_MODE:
-        return demo.get_library_items(page, size, search, sort)
+        return demo.get_library_items(key, page, size, search, sort)
 
     try:
         server = get_server()
@@ -358,7 +358,7 @@ def get_poster(rating_key):
 @require_admin
 def get_library_collections(key):
     if DEMO_MODE:
-        return demo.get_library_collections()
+        return demo.get_library_collections(key)
 
     def fetch():
         server = get_server()
