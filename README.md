@@ -1,58 +1,95 @@
-# Plex Collection Manager
+# docker-plex-collection-manager
 
-![Vue](https://img.shields.io/badge/Vue-3-42b883)
-![Vite](https://img.shields.io/badge/Vite-5-646cff)
-![Tailwind](https://img.shields.io/badge/Tailwind-3-38bdf8)
-![Flask](https://img.shields.io/badge/Flask-API-000000)
-![plexapi](https://img.shields.io/badge/plexapi-powered-e5a00d)
 ![License](https://img.shields.io/badge/license-MIT-blue)
+![web image](https://img.shields.io/badge/ghcr.io-web-2496ed)
+![api image](https://img.shields.io/badge/ghcr.io-api-2496ed)
+![Vue](https://img.shields.io/badge/Vue-3-42b883)
+![Flask](https://img.shields.io/badge/Flask-API-000000)
 
-A Letterboxd-style web app for building and ranking **Plex collections** by hand.
-Search your library, drag posters (or rows) into the order you want, rename the
-collection, and it saves straight to your Plex Media Server. The whole thing runs
-in two small containers.
+A Letterboxd-style web app for ranking and editing **Plex collections** by hand,
+packaged as two small Docker images: an nginx-served Vue app and a Flask API that
+talks to Plex with [python-plexapi](https://github.com/pkkid/python-plexapi).
 
-I built it because Plex's own collection editing is clunky, and I wanted to rank
-movies by recommendation order, not alphabetically.
+It ships with a demo mode, so you can run the whole thing with no Plex server and
+no tokens.
 
-## Quickstart (no Plex needed)
+## Images
 
-There's a demo mode with fake libraries and collections, so you can try it without
-a server or any tokens:
+| Image | Description |
+|-------|-------------|
+| `ghcr.io/anthonykellyjr/plex-collection-manager-web` | nginx serving the built app, proxies `/capi` to the API |
+| `ghcr.io/anthonykellyjr/plex-collection-manager-api` | Flask backend (python-plexapi) |
+
+## Usage
+
+```yaml
+# docker-compose.yml
+services:
+  api:
+    image: ghcr.io/anthonykellyjr/plex-collection-manager-api:latest
+    environment:
+      - DEMO_MODE=0
+      - PLEX_URL=http://your-plex-host:32400
+      - PLEX_TOKEN=your-plex-token
+      - ADMIN_KEY=change-me
+    volumes:
+      - poster-cache:/cache
+    restart: unless-stopped
+  web:
+    image: ghcr.io/anthonykellyjr/plex-collection-manager-web:latest
+    ports:
+      - 8080:80
+    depends_on:
+      - api
+    restart: unless-stopped
+volumes:
+  poster-cache:
+```
 
 ```bash
-git clone https://github.com/anthonykellyjr/plex-collection-manager
-cd plex-collection-manager
+docker compose up -d
+```
+
+Then open `http://localhost:8080` and log in with your `ADMIN_KEY`.
+
+### Try the demo (no Plex)
+
+```bash
+git clone https://github.com/anthonykellyjr/docker-plex-collection-manager
+cd docker-plex-collection-manager
 docker compose up --build
 ```
 
-Open http://localhost:8080 and log in with the key `demo`. Make a collection, drag
-things around, switch between list and grid. Nothing hits a real server, and it
-resets when you restart.
+`DEMO_MODE` is on by default, so this works with no Plex. Open `http://localhost:8080`
+and log in with the key `demo`. Make a collection, drag to reorder, switch list/grid.
+It resets when you restart.
 
-## Point it at your Plex
+## Parameters
 
-Same two containers, real data:
+| Parameter | Function |
+|-----------|----------|
+| `-p 8080:80` | Web UI (the `web` container). |
+| `-e DEMO_MODE=1` | Run with fake data and no Plex. Set `0` for a real server. |
+| `-e PLEX_URL` | Plex base URL, e.g. `http://10.0.0.10:32400`. Needed when `DEMO_MODE=0`. |
+| `-e PLEX_TOKEN` | Plex server token. Needed when `DEMO_MODE=0`. |
+| `-e ADMIN_KEY` | The app's login, sent as `X-Admin-Key`. Needed when `DEMO_MODE=0`. |
+| `-e GUNICORN_WORKERS=1` | API workers. Demo needs 1; raise it for real use. |
+| `-v /cache` | Where the `api` container caches resized posters. |
 
-1. Copy `.env.example` to `.env`.
-2. Set `DEMO_MODE=0` and fill in `PLEX_URL`, `PLEX_TOKEN`, and an `ADMIN_KEY` you pick.
-3. `docker compose up --build`, then open http://localhost:8080 and log in with your `ADMIN_KEY`.
-
-`ADMIN_KEY` is just the app's login (sent as the `X-Admin-Key` header). Here's how to
-[find your Plex token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/).
+Here's how to [find your Plex token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/).
 
 ## What it does
 
-- **Drag to reorder.** Posters in a grid, or a ranked row list like a Letterboxd diary. The list makes ranking easy; the toggle remembers which you used.
+- **Drag to reorder.** Poster grid or a ranked row list like a Letterboxd diary. The toggle remembers which you used.
 - **Search or browse to add.** Type to find a film, or flip to a Recent tab and add from the newest in your library.
-- **Saves in the background.** Add, remove, rename, reorder, it all autosaves. A small status and a toast tell you it synced, no modal blocking the page.
-- **Fast posters.** The backend caches resized posters on disk and only ever asks Plex for the size it needs, so it stays light on the server.
-- **Kometa-aware.** Flags collections managed by [Kometa](https://kometa.wiki/) so you don't fight a tool that's going to overwrite you.
-- **Smart collections are read-only**, so you can't break a rule-based one by accident.
+- **Saves in the background.** Add, remove, rename, reorder, it all autosaves. A small status and a toast confirm it, no modal blocking the page.
+- **Fast posters.** The API caches resized posters on disk and only asks Plex for the size it needs, so it stays light on the server.
+- **Kometa-aware.** Flags collections managed by [Kometa](https://kometa.wiki/) so you don't fight a tool that will overwrite you.
+- **Smart collections are read-only**, so a rule-based one can't be broken by accident.
 
 ## Screenshots
 
-Drop images in `docs/screenshots/` and link them here, for example:
+Drop images in `docs/screenshots/` and link them here:
 
 ```
 ![Editor](docs/screenshots/editor.png)
@@ -62,66 +99,31 @@ Drop images in `docs/screenshots/` and link them here, for example:
 ## How it works
 
 ```
-browser ──>  nginx  ──/────────>  built Vue app (static)
-                    ──/capi/──>   Flask API  ──>  Plex Media Server
+browser ──>  web (nginx)  ──/────────>  built Vue app
+                          ──/capi/──>   api (Flask)  ──>  Plex Media Server
 ```
 
-- **web**: builds the Vue app and serves it with nginx, which also proxies `/capi` to the API.
-- **api**: a small Flask service using [python-plexapi](https://github.com/pkkid/python-plexapi). In demo mode it serves the fixtures in `backend/demo.py` instead.
+No database. Collections live in Plex. In demo mode the API serves the fixtures in
+`backend/demo.py` instead of talking to Plex.
 
-Two containers, one `docker compose up`. No database, collections live in Plex.
+## Build from source
 
-## Project layout
-
-```
-.
-├── docker-compose.yml      # web + api, demo mode by default
-├── Dockerfile              # frontend: vite build -> nginx
-├── nginx.conf              # serves the app, proxies /capi -> api
-├── index.html
-├── vite.config.js
-├── src/
-│   ├── App.vue
-│   ├── components/         # AuthGate, CollectionDetail, AddItemsPanel, PosterCard, ...
-│   ├── composables/        # useApi, useViewPreference
-│   └── shared/             # vendored UI bits so the repo is self-contained
-└── backend/
-    ├── Dockerfile          # gunicorn
-    ├── api.py              # the /capi endpoints
-    ├── demo.py             # in-memory data for demo mode
-    └── requirements.txt
-```
-
-## Configuration
-
-The API reads everything from the environment. Nothing is hardcoded.
-
-| Variable           | Default                              | What it's for                                              |
-|--------------------|--------------------------------------|------------------------------------------------------------|
-| `DEMO_MODE`        | `1`                                  | Run with fake data and no Plex. Set `0` for a real server. |
-| `PLEX_URL`         | `http://host.docker.internal:32400`  | Your Plex base URL.                                        |
-| `PLEX_TOKEN`       | (none)                               | Plex server token. Required when `DEMO_MODE=0`.            |
-| `ADMIN_KEY`        | `demo` in demo mode                  | The app's login key. Required when `DEMO_MODE=0`.          |
-| `WEB_PORT`         | `8080`                               | Host port for the web UI.                                  |
-| `GUNICORN_WORKERS` | `1`                                  | API workers. Demo needs 1; raise it for real use.         |
-
-## Development
-
-Node isn't required on the host. Run the dev server in a container with hot reload,
-pointed at a running backend:
+The compose file above builds locally if you swap `image:` for `build:` (the repo's
+own `docker-compose.yml` already does, for the demo). To build the images yourself:
 
 ```bash
-# backend on :5060
-docker run --rm -p 5060:5000 --env-file .env collection-api
+docker build -t plex-collection-manager-web .
+docker build -t plex-collection-manager-api ./backend
+```
 
-# vite dev server on :5173
+For frontend dev with hot reload, point Vite at a running API:
+
+```bash
 docker run --rm -it -v "$(pwd):/app" -w /app -p 5173:5173 \
   --add-host=host.docker.internal:host-gateway \
   -e VITE_API_TARGET=http://host.docker.internal:5060 \
   node:22-alpine sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
 ```
-
-Then open http://localhost:5173.
 
 ## License
 
