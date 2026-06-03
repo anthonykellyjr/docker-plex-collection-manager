@@ -1,5 +1,6 @@
 <script setup>
 import { ref } from 'vue'
+import { apiUrl } from '../shared/useApi.js'
 
 // One row in the ranked LIST view, rank · thumbnail · title/year · remove.
 // Mirrors PosterCard's data shape; the parent VueDraggable handles reordering
@@ -18,7 +19,7 @@ const errored = ref(false)
 
 const adminKey = localStorage.getItem('collection_manager_admin_key') || ''
 const posterSrc = props.item.thumb
-  ? `${props.item.thumb}?k=${encodeURIComponent(adminKey)}&w=120&h=180`
+  ? `${apiUrl(props.item.thumb)}?k=${encodeURIComponent(adminKey)}&w=120&h=180`
   : null
 </script>
 

@@ -6,6 +6,11 @@ import vue from '@vitejs/plugin-vue'
 export default defineConfig({
   plugins: [vue()],
   base: process.env.VITE_BASE || '/',
+  // Where the app's API lives. Defaults to /capi (app at the domain root). Set
+  // VITE_API_BASE to serve under a subpath, e.g. /demos/collection-manager/capi.
+  define: {
+    'import.meta.env.VITE_API_BASE': JSON.stringify(process.env.VITE_API_BASE || '/capi'),
+  },
   server: {
     proxy: {
       '/capi': {

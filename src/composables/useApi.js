@@ -1,4 +1,4 @@
-import { useApi as useSharedApi } from '../shared/useApi.js'
+import { useApi as useSharedApi, apiUrl } from '../shared/useApi.js'
 
 const api = useSharedApi({
   storageKey: 'collection_manager_admin_key',
@@ -10,6 +10,7 @@ export function useApi() {
     adminKey: api.authKey,
     setAdminKey: api.setAuthKey,
     clearAdminKey: api.clearAuthKey,
-    apiFetch: api.apiFetch
+    apiFetch: api.apiFetch,
+    apiUrl,
   }
 }

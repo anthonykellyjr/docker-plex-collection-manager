@@ -1,6 +1,7 @@
 <script setup>
 import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useApi } from '../composables/useApi.js'
+import { apiUrl } from '../shared/useApi.js'
 
 // Tabbed "add a film" sidebar shared by CollectionDetail + NewCollection.
 //   Search tab, type-to-find (existing behaviour).
@@ -193,7 +194,7 @@ const add = (item) => {
                       : 'hover:bg-slate-800/60 cursor-pointer'">
               <div class="w-8 h-12 flex-shrink-0 rounded-md overflow-hidden bg-slate-800">
                 <img v-if="result.thumb"
-                     :src="`${result.thumb}?k=${encodeURIComponent(adminKey)}&w=120&h=180`"
+                     :src="`${apiUrl(result.thumb)}?k=${encodeURIComponent(adminKey)}&w=120&h=180`"
                      :alt="result.title"
                      class="w-full h-full object-cover"
                      loading="lazy"
@@ -246,7 +247,7 @@ const add = (item) => {
                       : 'hover:bg-slate-800/60 cursor-pointer'">
               <div class="w-8 h-12 flex-shrink-0 rounded-md overflow-hidden bg-slate-800">
                 <img v-if="item.thumb"
-                     :src="`${item.thumb}?k=${encodeURIComponent(adminKey)}&w=120&h=180`"
+                     :src="`${apiUrl(item.thumb)}?k=${encodeURIComponent(adminKey)}&w=120&h=180`"
                      :alt="item.title"
                      class="w-full h-full object-cover"
                      loading="lazy"

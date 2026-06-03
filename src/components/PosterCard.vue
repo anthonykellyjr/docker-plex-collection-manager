@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { usePosterVersion } from '../composables/usePosterVersion.js'
+import { apiUrl } from '../shared/useApi.js'
 
 const props = defineProps({
   item: { type: Object, required: true },
@@ -21,7 +22,7 @@ const { suffix } = usePosterVersion()
 const adminKey = localStorage.getItem('collection_manager_admin_key') || ''
 const [pw, ph] = props.size === 'thumb' ? [120, 180] : [300, 450]
 const posterSrc = computed(() => props.item.thumb
-  ? `${props.item.thumb}?k=${encodeURIComponent(adminKey)}&w=${pw}&h=${ph}${suffix(props.item.ratingKey)}`
+  ? `${apiUrl(props.item.thumb)}?k=${encodeURIComponent(adminKey)}&w=${pw}&h=${ph}${suffix(props.item.ratingKey)}`
   : null)
 </script>
 
