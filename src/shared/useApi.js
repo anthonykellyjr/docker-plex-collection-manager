@@ -24,10 +24,13 @@ export function useApi({ storageKey, headerName }) {
   }
 
   const apiFetch = async (path, options = {}) => {
+    // For FormData (file uploads) let the browser set the multipart boundary,
+    // so only force a JSON content-type for everything else.
+    const isForm = typeof FormData !== 'undefined' && options.body instanceof FormData
     const res = await fetch(apiUrl(path), {
       ...options,
       headers: {
-        'Content-Type': 'application/json',
+        ...(isForm ? {} : { 'Content-Type': 'application/json' }),
         [headerName]: authKey.value,
         ...(options.headers || {}),
       },

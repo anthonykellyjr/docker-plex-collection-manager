@@ -227,6 +227,46 @@ const setCover = async (item) => {
   }
 }
 
+// Set the cover from an uploaded image file or a pasted image URL (an
+// alternative to picking a member's poster). Same fire-and-bust flow as setCover.
+const showPosterModal = ref(false)
+const posterUrl = ref('')
+const posterFile = ref(null)
+const posterBusy = ref(false)
+
+const openPosterModal = () => {
+  posterUrl.value = ''
+  posterFile.value = null
+  showPosterModal.value = true
+}
+const closePosterModal = () => { if (!posterBusy.value) showPosterModal.value = false }
+const onPosterFile = (e) => { posterFile.value = (e.target.files && e.target.files[0]) || null }
+
+const submitPoster = async () => {
+  if (posterBusy.value) return
+  const url = posterUrl.value.trim()
+  if (!posterFile.value && !url) return
+  posterBusy.value = true
+  try {
+    let options
+    if (posterFile.value) {
+      const form = new FormData()
+      form.append('file', posterFile.value)
+      options = { method: 'POST', body: form }
+    } else {
+      options = { method: 'POST', body: JSON.stringify({ url }) }
+    }
+    await apiFetch(`/capi/collections/${props.collectionKey}/poster`, options)
+    bumpPoster(props.collectionKey)
+    emit('toast', 'Poster updated', 'success')
+    showPosterModal.value = false
+  } catch (e) {
+    emit('toast', e.message || 'Failed to set poster', 'error')
+  } finally {
+    posterBusy.value = false
+  }
+}
+
 const onDragEnd = (e) => {
   // Ignore no-op drags (picked up and dropped back in the same slot).
   if (e && e.oldIndex === e.newIndex) return
@@ -464,6 +504,15 @@ watch(summary, () => { if (!isLoading.value && !reverting) markChanged() }, { fl
           <span v-else-if="justSaved" class="text-emerald-400">Saved</span>
         </span>
 
+        <!-- Set poster (upload an image or paste a URL) -->
+        <button v-if="!isSmart" @click="openPosterModal"
+                title="Set collection poster"
+                class="p-1.5 rounded-lg text-slate-500 hover:text-purple-300 hover:bg-purple-500/15 transition-colors flex-shrink-0">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+          </svg>
+        </button>
+
         <!-- Reload (in-app refresh) -->
         <button @click="reload"
                 :disabled="isReloading"
@@ -631,6 +680,45 @@ watch(summary, () => { if (!isLoading.value && !reverting) markChanged() }, { fl
                        @add="addItem" />
       </div>
     </template>
+
+    <!-- Set-poster modal: upload an image file or paste an image URL -->
+    <div v-if="showPosterModal"
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+         @click.self="closePosterModal">
+      <div class="w-full max-w-md bg-slate-900 border border-slate-700 rounded-2xl p-5 shadow-2xl">
+        <h3 class="text-lg font-bold text-slate-100 mb-1">Set collection poster</h3>
+        <p class="text-xs text-slate-400 mb-4">Upload an image or paste an image URL. You can also hover any item below and click its cover icon to use that item's poster.</p>
+
+        <label class="block text-xs font-medium text-slate-300 mb-1.5">Upload image</label>
+        <input type="file" accept="image/*" @change="onPosterFile"
+               class="block w-full text-sm text-slate-300 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-purple-600 file:text-white file:font-medium hover:file:bg-purple-500 file:cursor-pointer" />
+        <p v-if="posterFile" class="text-xs text-slate-400 mt-1.5 truncate">Selected: {{ posterFile.name }}</p>
+
+        <div class="flex items-center gap-3 my-4 text-xs text-slate-500">
+          <span class="flex-1 h-px bg-slate-700"></span>or<span class="flex-1 h-px bg-slate-700"></span>
+        </div>
+
+        <label class="block text-xs font-medium text-slate-300 mb-1.5">Paste image URL</label>
+        <input v-model="posterUrl" type="url" placeholder="https://image.example.com/poster.jpg"
+               class="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-100 placeholder-slate-500 focus:border-purple-500 focus:outline-none" />
+
+        <div class="flex items-center justify-end gap-2 mt-5">
+          <button @click="closePosterModal" :disabled="posterBusy"
+                  class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-medium rounded-xl transition-colors disabled:opacity-50">
+            Cancel
+          </button>
+          <button @click="submitPoster"
+                  :disabled="posterBusy || (!posterFile && !posterUrl.trim())"
+                  class="px-5 py-2 bg-purple-600 hover:bg-purple-500 text-white text-sm font-bold rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
+            <svg v-if="posterBusy" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            <span>{{ posterBusy ? 'Saving…' : 'Set poster' }}</span>
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 

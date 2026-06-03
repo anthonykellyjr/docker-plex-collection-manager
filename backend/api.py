@@ -8,6 +8,7 @@ import os
 import time
 import yaml
 import hashlib
+import tempfile
 import threading
 import requests
 from functools import wraps
@@ -561,26 +562,64 @@ def update_collection(rating_key):
 @app.route('/capi/collections/<rating_key>/poster', methods=['POST'])
 @require_admin
 def set_collection_poster(rating_key):
-    data = request.get_json() or {}
-    item_key = data.get('ratingKey')
-    if not item_key:
-        return jsonify({'error': 'ratingKey required'}), 400
+    # Three ways to set a collection's poster: a member item's artwork
+    # (ratingKey), a pasted image URL (url), or an uploaded image file (file).
+    MAX_UPLOAD = 8 * 1024 * 1024
+    upload = request.files.get('file')
+    file_bytes = file_mime = item_key = poster_url = None
+
+    if upload is not None and upload.filename:
+        file_mime = (upload.mimetype or '').lower()
+        if not file_mime.startswith('image/'):
+            return jsonify({'error': 'file must be an image'}), 400
+        file_bytes = upload.read()
+        if not file_bytes:
+            return jsonify({'error': 'empty file'}), 400
+        if len(file_bytes) > MAX_UPLOAD:
+            return jsonify({'error': 'image too large (max 8 MB)'}), 413
+    else:
+        data = request.get_json(silent=True) or {}
+        item_key = data.get('ratingKey')
+        poster_url = (data.get('url') or '').strip()
+        if not item_key and not poster_url:
+            return jsonify({'error': 'ratingKey, url, or file required'}), 400
+        if poster_url and not poster_url.lower().startswith(('http://', 'https://')):
+            return jsonify({'error': 'url must be http(s)'}), 400
 
     if DEMO_MODE:
-        return demo.set_collection_cover(rating_key, item_key)
+        if file_bytes is not None:
+            return demo.set_collection_cover(rating_key, data=(file_mime, file_bytes))
+        if poster_url:
+            return demo.set_collection_cover(rating_key, url=poster_url)
+        return demo.set_collection_cover(rating_key, item_key=item_key)
 
+    tmp_path = None
     try:
         server = get_server()
         collection = server.fetchItem(int(rating_key))
-        # Point the collection's poster at the chosen item's artwork.
-        thumb_url = f'{PLEX_URL}/library/metadata/{item_key}/thumb?X-Plex-Token={PLEX_TOKEN}'
-        collection.uploadPoster(url=thumb_url)
+        if file_bytes is not None:
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.img') as tf:
+                tf.write(file_bytes)
+                tmp_path = tf.name
+            collection.uploadPoster(filepath=tmp_path)
+        elif poster_url:
+            collection.uploadPoster(url=poster_url)
+        else:
+            # Point the collection's poster at the chosen member item's artwork.
+            thumb_url = f'{PLEX_URL}/library/metadata/{item_key}/thumb?X-Plex-Token={PLEX_TOKEN}'
+            collection.uploadPoster(url=thumb_url)
         delete_poster_cache(rating_key)
         invalidate_cache('collections:')
         return jsonify({'success': True})
     except Exception as e:
         reset_server()
         return jsonify({'error': str(e)}), 500
+    finally:
+        if tmp_path:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 @app.route('/capi/collections/<rating_key>', methods=['DELETE'])
