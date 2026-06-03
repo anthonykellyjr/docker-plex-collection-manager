@@ -9,7 +9,7 @@ Run the demo backend with a single worker (the store is plain in-memory state).
 """
 
 from datetime import date, timedelta
-from flask import jsonify, Response
+from flask import jsonify, Response, redirect, request
 
 # Libraries, in the order they show as tabs. Counts are filled in below.
 _LIBRARIES = [
@@ -110,13 +110,19 @@ def _item(key):
 
 def _collection(cid):
     c = _COLLECTIONS[cid]
-    cover = c.get('cover') or (c['items'][0] if c['items'] else None)
+    # A custom cover (uploaded file or pasted URL) is served via a synthetic
+    # `col-<cid>` poster key; otherwise fall back to the chosen/first member.
+    if c.get('coverUrl') or c.get('coverData'):
+        thumb = f'/capi/poster/col-{cid}'
+    else:
+        cover = c.get('cover') or (c['items'][0] if c['items'] else None)
+        thumb = f'/capi/poster/{cover}' if cover else None
     return {
         'ratingKey': cid,
         'title': c['title'],
         'titleSort': c['title'],
         'summary': c['summary'],
-        'thumb': f'/capi/poster/{cover}' if cover else None,
+        'thumb': thumb,
         'smart': False,
         'childCount': len(c['items']),
         'kometaManaged': False,
@@ -193,11 +199,24 @@ def update_collection(cid, data):
     return jsonify({'success': True, 'stats': stats})
 
 
-def set_collection_cover(cid, item_key):
+def set_collection_cover(cid, item_key=None, url=None, data=None):
+    """Set a collection's cover from a member item, a pasted URL, or an uploaded
+    file (mimetype, bytes). Only one mode wins; the others are cleared."""
     if cid not in _COLLECTIONS:
         return jsonify({'error': 'Collection not found'}), 404
-    if item_key in _BY_KEY:
-        _COLLECTIONS[cid]['cover'] = item_key
+    c = _COLLECTIONS[cid]
+    if data is not None:
+        c['coverData'] = data
+        c.pop('coverUrl', None)
+        c.pop('cover', None)
+    elif url:
+        c['coverUrl'] = url
+        c.pop('coverData', None)
+        c.pop('cover', None)
+    elif item_key and item_key in _BY_KEY:
+        c['cover'] = item_key
+        c.pop('coverUrl', None)
+        c.pop('coverData', None)
     return jsonify({'success': True})
 
 
@@ -214,6 +233,64 @@ def reorder_collections(data):
     kept = [k for k in keys if k in _COLLECTIONS]
     _order[:] = kept + [k for k in _order if k not in kept]
     return jsonify({'success': True})
+
+
+# --- real posters --------------------------------------------------------------
+# Public TMDb poster paths for the demo's (real) film/TV titles, so the demo looks
+# like an actual library instead of coloured placeholders. Music artists have no
+# film poster and fall back to the gradient below. These paths are public, not
+# secrets, and image.tmdb.org serves them with no API key.
+TMDB_IMG = 'https://image.tmdb.org/t/p'
+_POSTERS = {
+    'Oppenheimer': '/8Gxv8gSFCU0XGDykEGv7zR1n2ua.jpg',
+    'Past Lives': '/k3waqVXSnvCZWfJYNtdamTgTtTA.jpg',
+    'Everything Everywhere All at Once': '/u68AjlvlutfEIcpmbYpKcdi09ut.jpg',
+    'The Batman': '/74xTEgt7R36Fpooo50r9T25onhq.jpg',
+    'Dune': '/gDzOcq0pfeCeqMBwKIJlSmQpjkZ.jpg',
+    'Nomadland': '/dKT8rGDR55cM1vGn7QZLA9Tg9YC.jpg',
+    'Soul': '/6jmppcaubzLF8wkXM36ganVISCo.jpg',
+    'Tenet': '/aCIFMriQh8rvhxpN1IWGgvH0Tlg.jpg',
+    'Parasite': '/7IiTTgloJzvGI1TAYymCfbfl3vT.jpg',
+    'Knives Out': '/pThyQovXQrw2m0s9x82twj48Jq4.jpg',
+    'Joker': '/udDclJoHjfjb8Ekgsd4FDteOkCU.jpg',
+    '1917': '/iZf0KyrE25z1sage4SYFLCCrMi9.jpg',
+    'Blade Runner 2049': '/gajva2L0rPYkEWjzgFlBXCAVBE5.jpg',
+    'Get Out': '/mE24wUCfjK8AoBBjaMjho7Rczr7.jpg',
+    'Arrival': '/x2FJsf1ElAgr63Y3PNPtJrcmpoe.jpg',
+    'La La Land': '/uDO8zWDhfWwoFdKS4fzkUJt0Rf0.jpg',
+    'Moonlight': '/qLnfEmPrDjJfPyyddLJPkXmshkp.jpg',
+    'The Revenant': '/ji3ecJphATlVgWNY0B0RVXZizdf.jpg',
+    'Sicario': '/lz8vNyXeidqqOdJW9ZjnDAMb5Vr.jpg',
+    'Mad Max: Fury Road': '/hA2ple9q4qnwxp3hKVNhroipsir.jpg',
+    'Ex Machina': '/dmJW8IAKHKxFNiUnoDR7JfsK7Rp.jpg',
+    'Whiplash': '/7fn624j5lj3xTme2SgiLCeuedmO.jpg',
+    'Birdman': '/rHUg2AuIuLSIYMYFgavVwqt1jtc.jpg',
+    'Gone Girl': '/ts996lKsxvjkO2yiYG0ht4qAicO.jpg',
+    'The Grand Budapest Hotel': '/eWdyYQreja6JGCzqHWXpWHDrrPo.jpg',
+    'Her': '/eCOtqtfvn7mxGl6nfmq4b1exJRc.jpg',
+    'Prisoners': '/jsS3a3ep2KyBVmmiwaz3LvK49b1.jpg',
+    'Gravity': '/kZ2nZw8D681aphje8NJi8EfbL1U.jpg',
+    'Drive': '/602vevIURmpDfzbnv5Ubi6wIkQm.jpg',
+    'Inception': '/xlaY2zyzMfkhk0HSC5VUwzoZPU1.jpg',
+    'The Social Network': '/n0ybibhJtQ5icDqTp8eRytcIHJx.jpg',
+    'There Will Be Blood': '/fa0RDkAlCec0STeMNAhPaF89q6U.jpg',
+    'No Country for Old Men': '/6d5XOczc226jECq0LIX0siKtgHR.jpg',
+    'The Dark Knight': '/qJ2tW6WMUDux911r6m7haRef0WH.jpg',
+    'Interstellar': '/yQvGrMoipbRoddT0ZR8tPoR7NfX.jpg',
+    'The Matrix': '/aOIuZAjPaRIE6CMzbazvcHuHXDc.jpg',
+    'Severance': '/pPHpeI2X1qEd1CS1SeyrdhZ4qnT.jpg',
+    'The Bear': '/4fVddnbhcmzRZE14NJY03GKS6Fn.jpg',
+    'Succession': '/z0XiwdrCQ9yVIr4O0pxzaAYRxdW.jpg',
+    'Better Call Saul': '/zjg4jpK1Wp2kiRvtt5ND0kznako.jpg',
+    'Chernobyl': '/hlLXt2tOPT6RRnjiUmoxyG1LTFi.jpg',
+    'Fleabag': '/27vEYsRKa3eAniwmoccOoluEXQ1.jpg',
+    'True Detective': '/zYqVTiHK5ZajYcNzAW7qWte5NWS.jpg',
+    'Breaking Bad': '/ztkUQFLlC19CCMYHW9o1zWhJRNq.jpg',
+    'The Wire': '/4lbclFySvugI51fwsyxBTOm4DqK.jpg',
+    'The Sopranos': '/rTc7ZXdroqjkKivFPvCPX0Ru7uw.jpg',
+    'Mad Men': '/7v8iCNzKFpdlrCMcqCoJyn74Nsa.jpg',
+    'Band of Brothers': '/pGzV187ogXzgJrvPRy2YPi29ofH.jpg',
+}
 
 
 # --- placeholder posters -------------------------------------------------------
@@ -242,7 +319,7 @@ def _wrap(title, width=13):
     return lines[:4]
 
 
-def get_poster(key):
+def _gradient(key):
     info = _BY_KEY.get(key)
     title = info[1] if info else 'Untitled'
     year = info[2] if info else ''
@@ -268,3 +345,30 @@ def get_poster(key):
     )
     return Response(svg, mimetype='image/svg+xml',
                     headers={'Cache-Control': 'public, max-age=86400'})
+
+
+def get_poster(key):
+    """Poster for a demo item or a custom collection cover.
+
+    Real film/TV titles 302-redirect to the TMDb image CDN; a `col-<cid>` key
+    serves a collection's uploaded file (bytes) or pasted URL; everything else
+    (music artists, unknown keys) falls back to a generated gradient card.
+    """
+    if key.startswith('col-'):
+        c = _COLLECTIONS.get(key[4:])
+        if c and c.get('coverData'):
+            mime, blob = c['coverData']
+            return Response(blob, mimetype=mime, headers={'Cache-Control': 'no-store'})
+        if c and c.get('coverUrl'):
+            return redirect(c['coverUrl'], code=302)
+        return _gradient(key)
+    info = _BY_KEY.get(key)
+    path = _POSTERS.get(info[1]) if info else None
+    if path:
+        try:
+            w = int(request.args.get('w', 300))
+        except (TypeError, ValueError):
+            w = 300
+        size = 'w185' if w <= 150 else ('w342' if w <= 342 else 'w500')
+        return redirect(f'{TMDB_IMG}/{size}{path}', code=302)
+    return _gradient(key)
