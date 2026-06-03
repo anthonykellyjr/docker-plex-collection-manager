@@ -13,6 +13,8 @@ talks to Plex with [python-plexapi](https://github.com/pkkid/python-plexapi).
 It ships with a demo mode, so you can run the whole thing with no Plex server and
 no tokens.
 
+**Live demo:** https://akplex.tv/demos/collection-manager/ (log in with `demo`)
+
 ## Images
 
 | Image | Description |
